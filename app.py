@@ -25,38 +25,112 @@ DEFAULT_CATEGORIES = [
 ]
 
 DEFAULT_RULES = [
+    # Groceries
     {"keyword": "SPINNEYS", "category": "Groceries"},
     {"keyword": "CARREFOUR", "category": "Groceries"},
+    {"keyword": "GMG CONSUMER", "category": "Groceries"},
+    {"keyword": "LULU", "category": "Groceries"},
+    {"keyword": "WAITROSE", "category": "Groceries"},
+
+    # Restaurants & Cafes
     {"keyword": "DELIVEROO", "category": "Restaurants & Cafes"},
     {"keyword": "TALABAT", "category": "Restaurants & Cafes"},
-    {"keyword": "UBER", "category": "Transport"},
+    {"keyword": "ZOMATO", "category": "Restaurants & Cafes"},
+    {"keyword": "STARBUCKS", "category": "Restaurants & Cafes"},
+    {"keyword": "PAUL", "category": "Restaurants & Cafes"},
+
+    # Transport
     {"keyword": "CAREEM", "category": "Transport"},
+    {"keyword": "UBER", "category": "Transport"},
     {"keyword": "RTA", "category": "Transport"},
     {"keyword": "SALIK", "category": "Transport"},
+    {"keyword": "VALTRANS", "category": "Transport"},
+    {"keyword": "TAXI", "category": "Transport"},
+
+    # Shopping
     {"keyword": "AMAZON", "category": "Shopping"},
     {"keyword": "NOON", "category": "Shopping"},
+    {"keyword": "IKEA", "category": "Shopping"},
+    {"keyword": "ACE", "category": "Shopping"},
+
+    # Beauty
     {"keyword": "SEPHORA", "category": "Beauty"},
     {"keyword": "FACES", "category": "Beauty"},
+    {"keyword": "TIPS & TOES", "category": "Beauty"},
+    {"keyword": "TIPSTOES", "category": "Beauty"},
+    {"keyword": "BEAUTY", "category": "Beauty"},
+    {"keyword": "THE BODY SHOP", "category": "Beauty"},
+    {"keyword": "KIKO", "category": "Beauty"},
+    {"keyword": "MAC", "category": "Beauty"},
+
+    # Fitness
     {"keyword": "FITNESS FIRST", "category": "Fitness"},
     {"keyword": "CLASS PASS", "category": "Fitness"},
+    {"keyword": "GYM", "category": "Fitness"},
+    {"keyword": "DECATHLON", "category": "Fitness"},
+
+    # Utilities & Bills
     {"keyword": "DEWA", "category": "Utilities & Bills"},
     {"keyword": "DU", "category": "Utilities & Bills"},
     {"keyword": "ETISALAT", "category": "Utilities & Bills"},
+    {"keyword": "EMARAT", "category": "Utilities & Bills"},
+
+    # Subscriptions
     {"keyword": "NETFLIX", "category": "Subscriptions"},
     {"keyword": "SPOTIFY", "category": "Subscriptions"},
+    {"keyword": "AMAZON PRIME", "category": "Subscriptions"},
+    {"keyword": "APPLE", "category": "Subscriptions"},
+    {"keyword": "GOOGLE", "category": "Subscriptions"},
+
+    # Healthcare
+    {"keyword": "PHARMACY", "category": "Healthcare"},
+    {"keyword": "CLINIC", "category": "Healthcare"},
+    {"keyword": "MEDICAL", "category": "Healthcare"},
+
+    # Travel
     {"keyword": "EMIRATES", "category": "Travel"},
+    {"keyword": "ETIHAD", "category": "Travel"},
+    {"keyword": "BOOKING.COM", "category": "Travel"},
+    {"keyword": "AIRBNB", "category": "Travel"},
 ]
 
-def try_read_first_file(files):
-    if not files:
-        return None
-    f = files[0]
-    name = f.name.lower()
-    if name.endswith(".csv"):
-        return pd.read_csv(f)
-    if name.endswith(".xlsx") or name.endswith(".xls"):
-        return pd.read_excel(f, engine="openpyxl")
+
+def parse_money(series: pd.Series) -> pd.Series:
+    """
+    Parse amounts like '53,00' -> 53.00 (float).
+    Removes spaces, converts comma decimal to dot.
+    """
+    s = series.astype(str).str.strip()
+    s = s.str.replace(" ", "", regex=False)
+    s = s.str.replace(",", ".", regex=False)
+    # Remove any non-numeric except dot and minus (just in case)
+    s = s.str.replace(r"[^0-9\.\-]", "", regex=True)
+    return pd.to_numeric(s, errors="coerce")
+
+
+def apply_rules(df: pd.DataFrame, rules_df: pd.DataFrame, default_category: str = "Other") -> pd.DataFrame:
+    df = df.copy()
+    desc = df["description"].fillna("").str.upper()
+    categories = pd.Series(default_category, index=df.index)
+
+    for _, row in rules_df.iterrows():
+        kw = str(row.get("keyword", "")).strip().upper()
+        cat = str(row.get("category", "")).strip()
+        if not kw or not cat:
+            continue
+        categories[desc.str.contains(kw, na=False)] = cat
+
+    df["category"] = categories
+    return df
+
+
+def detect_cols(cols_lower: list[str], needle_options: list[str]) -> str | None:
+    for c in cols_lower:
+        for n in needle_options:
+            if n in c:
+                return c
     return None
+
 
 def normalize_statement_df(
     df_raw: pd.DataFrame,
@@ -64,124 +138,140 @@ def normalize_statement_df(
     date_col: str | None,
     desc_col: str | None,
     amount_col: str | None,
-    debit_col: str | None,
-    credit_col: str | None,
+    dc_col: str | None,
 ) -> pd.DataFrame:
     df = df_raw.copy()
     df.columns = [str(c).strip() for c in df.columns]
 
-    def val_or_none(x):
-        return None if (x is None or x == "(auto)") else x
+    cols_lower_map = {c: c.lower() for c in df.columns}
 
-    date_col = val_or_none(date_col)
-    desc_col = val_or_none(desc_col)
-    amount_col = val_or_none(amount_col)
-    debit_col = val_or_none(debit_col)
-    credit_col = val_or_none(credit_col)
+    def to_none(v):
+        return None if (v is None or v == "(auto)") else v
 
-    # If user selected debit/credit, build a signed amount
-    if amount_col is None and (debit_col or credit_col):
-        debit_series = pd.to_numeric(df[debit_col], errors="coerce").fillna(0) if debit_col else 0
-        credit_series = pd.to_numeric(df[credit_col], errors="coerce").fillna(0) if credit_col else 0
-        df["__amount"] = credit_series - debit_series
-        amount_col = "__amount"
+    date_col = to_none(date_col)
+    desc_col = to_none(desc_col)
+    amount_col = to_none(amount_col)
+    dc_col = to_none(dc_col)
+
+    # Auto-detect if user kept "(auto)"
+    if date_col is None:
+        date_col = next((c for c in df.columns if "date" in cols_lower_map[c]), None)
+    if desc_col is None:
+        desc_col = next((c for c in df.columns if cols_lower_map[c] in ["details", "description", "narration"]), None)
+    if amount_col is None:
+        amount_col = next((c for c in df.columns if "amount" in cols_lower_map[c] or "amt" in cols_lower_map[c]), None)
+    if dc_col is None:
+        # your file uses "Debit/Credit"
+        dc_col = next((c for c in df.columns if "debit/credit" in cols_lower_map[c] or "debit credit" in cols_lower_map[c]), None)
 
     if not all([date_col, desc_col, amount_col]):
         raise ValueError(
-            "Column mapping is required for your file.\n"
+            "Could not detect required columns.\n"
             f"Columns found: {list(df.columns)}\n"
-            "Please select Date + Description + (Amount OR Debit/Credit) from the sidebar."
+            "Select Date + Description + Amount in the sidebar."
         )
 
     tmp = pd.DataFrame(
         {
             "date": pd.to_datetime(df[date_col], errors="coerce"),
             "description": df[desc_col].astype(str),
-            "amount": pd.to_numeric(df[amount_col], errors="coerce"),
+            "amount": parse_money(df[amount_col]),
         }
     )
+
+    # Flip sign for debits (spend)
+    if dc_col is not None:
+        dc = df[dc_col].astype(str).str.upper().str.strip()
+        tmp.loc[dc == "DEBIT", "amount"] *= -1
+
     tmp["account"] = account_name
     tmp = tmp.dropna(subset=["date", "amount"])
     tmp["month"] = tmp["date"].dt.to_period("M").astype(str)
     tmp["year"] = tmp["date"].dt.year
+
+    if tmp.empty:
+        raise ValueError(
+            "0 rows parsed after cleaning. Likely wrong column mapping or unreadable date/amount format.\n"
+            "Tip: Date should look like '30 Jan 2025', Amount like '53,00', and Debit/Credit should be 'Debit'/'Credit'."
+        )
+
     return tmp
 
-def load_and_clean(files, account_name, mapping):
+
+def read_file_to_df(f) -> pd.DataFrame:
+    name = f.name.lower()
+    if name.endswith(".csv"):
+        return pd.read_csv(f)
+    if name.endswith(".xlsx") or name.endswith(".xls"):
+        return pd.read_excel(f, engine="openpyxl")
+    raise ValueError(f"Unsupported file type: {f.name}. Please upload CSV or Excel (XLSX/XLS).")
+
+
+def load_and_clean(files, account_name: str, mapping: dict) -> pd.DataFrame:
     dfs = []
     for f in files:
-        name = f.name.lower()
-        if name.endswith(".csv"):
-            df_raw = pd.read_csv(f)
-        elif name.endswith(".xlsx") or name.endswith(".xls"):
-            df_raw = pd.read_excel(f, engine="openpyxl")
-        else:
-            raise ValueError(f"Unsupported file type: {f.name}")
-
+        df_raw = read_file_to_df(f)
         tmp = normalize_statement_df(
-            df_raw,
-            account_name,
-            mapping["date_col"],
-            mapping["desc_col"],
-            mapping["amount_col"],
-            mapping["debit_col"],
-            mapping["credit_col"],
+            df_raw=df_raw,
+            account_name=account_name,
+            date_col=mapping["date_col"],
+            desc_col=mapping["desc_col"],
+            amount_col=mapping["amount_col"],
+            dc_col=mapping["dc_col"],
         )
         dfs.append(tmp)
     return pd.concat(dfs, ignore_index=True)
 
-def apply_rules(df: pd.DataFrame, rules_df: pd.DataFrame, default_category: str = "Other") -> pd.DataFrame:
-    df = df.copy()
-    desc = df["description"].fillna("").str.upper()
-    categories = pd.Series(default_category, index=df.index)
-    for _, row in rules_df.iterrows():
-        kw = str(row.get("keyword", "")).strip().upper()
-        cat = str(row.get("category", "")).strip()
-        if not kw or not cat:
-            continue
-        categories[desc.str.contains(kw, na=False)] = cat
-    df["category"] = categories
-    return df
 
 def main():
     st.title("💳 12-Month Spending Tracker (Excel/CSV, Auto-categorized)")
 
     st.sidebar.header("1. Upload files")
-    acc1_files = st.sidebar.file_uploader("Account 1 (CSV/XLSX)", type=["csv", "xlsx", "xls"], accept_multiple_files=True)
-    acc2_files = st.sidebar.file_uploader("Account 2 (CSV/XLSX)", type=["csv", "xlsx", "xls"], accept_multiple_files=True)
+    acc1_files = st.sidebar.file_uploader(
+        "Account 1 (CSV/XLSX)",
+        type=["csv", "xlsx", "xls"],
+        accept_multiple_files=True,
+        key="acc1",
+    )
+    acc2_files = st.sidebar.file_uploader(
+        "Account 2 (CSV/XLSX)",
+        type=["csv", "xlsx", "xls"],
+        accept_multiple_files=True,
+        key="acc2",
+    )
 
     account1_name = st.sidebar.text_input("Account 1 name", value="Account 1")
     account2_name = st.sidebar.text_input("Account 2 name", value="Account 2")
 
-    st.sidebar.header("0. Column mapping (required for your exports)")
-    sample_df = try_read_first_file(acc1_files or acc2_files)
-    sample_cols = list(sample_df.columns) if sample_df is not None else []
+    st.sidebar.header("0. Column mapping (for your export format)")
 
-    date_col = st.sidebar.selectbox("Date column", ["(auto)"] + [str(c) for c in sample_cols])
-    desc_col = st.sidebar.selectbox("Description column", ["(auto)"] + [str(c) for c in sample_cols])
+    sample_df = None
+    sample_cols = []
+    try:
+        sample_file = (acc1_files or acc2_files or [None])[0]
+        if sample_file is not None:
+            sample_df = read_file_to_df(sample_file)
+            sample_cols = [str(c).strip() for c in sample_df.columns]
+    except Exception:
+        sample_cols = []
 
-    mode = st.sidebar.radio("Amount mode", ["Single Amount column", "Debit + Credit columns"])
-    amount_col = "(auto)"
-    debit_col = "(auto)"
-    credit_col = "(auto)"
-    if mode == "Single Amount column":
-        amount_col = st.sidebar.selectbox("Amount column", ["(auto)"] + [str(c) for c in sample_cols])
-    else:
-        debit_col = st.sidebar.selectbox("Debit column", ["(auto)"] + [str(c) for c in sample_cols])
-        credit_col = st.sidebar.selectbox("Credit column", ["(auto)"] + [str(c) for c in sample_cols])
+    # Your real headers: Date, Details, Amount, Debit/Credit
+    date_pick = st.sidebar.selectbox("Date column", ["(auto)"] + sample_cols, index=0)
+    desc_pick = st.sidebar.selectbox("Description column", ["(auto)"] + sample_cols, index=0)
+    amount_pick = st.sidebar.selectbox("Amount column", ["(auto)"] + sample_cols, index=0)
+    dc_pick = st.sidebar.selectbox("Debit/Credit column (optional but recommended)", ["(auto)"] + sample_cols, index=0)
 
     mapping = {
-        "date_col": date_col,
-        "desc_col": desc_col,
-        "amount_col": amount_col if mode == "Single Amount column" else "(auto)",
-        "debit_col": debit_col if mode != "Single Amount column" else "(auto)",
-        "credit_col": credit_col if mode != "Single Amount column" else "(auto)",
+        "date_col": date_pick,
+        "desc_col": desc_pick,
+        "amount_col": amount_pick,
+        "dc_col": dc_pick,
     }
 
     st.sidebar.header("2. Categories")
     categories_text = st.sidebar.text_area("Categories (one per line)", value="\n".join(DEFAULT_CATEGORIES), height=220)
     category_list = [c.strip() for c in categories_text.splitlines() if c.strip()]
 
-    st.sidebar.header("3. Rules")
     if "rules_df" not in st.session_state:
         st.session_state.rules_df = pd.DataFrame(DEFAULT_RULES)
 
@@ -195,16 +285,23 @@ def main():
                 all_dfs.append(load_and_clean(acc1_files, account1_name, mapping))
             if acc2_files:
                 all_dfs.append(load_and_clean(acc2_files, account2_name, mapping))
+
             df_all = pd.concat(all_dfs, ignore_index=True).sort_values("date")
             df_all["category"] = "Other"
             st.session_state.df_all = df_all
+
+            st.success(f"Loaded {len(df_all)} transactions ✅")
+            st.dataframe(df_all.head(20), use_container_width=True)
         except Exception as e:
             st.error(f"Error loading statements: {e}")
             return
 
     df_all = st.session_state.df_all
     if df_all is None:
-        st.info("Upload files, choose column mapping in the sidebar, then click **Load & combine data**.")
+        st.info("Upload files, choose mapping (Date/Details/Amount/Debit-Credit), then click **Load & combine data**.")
+        st.markdown(
+            "For your file, pick: **Date → Date**, **Description → Details**, **Amount → Amount**, **Debit/Credit → Debit/Credit**."
+        )
         return
 
     st.subheader("Step 1 – Rules (auto-categorisation)")
@@ -216,28 +313,41 @@ def main():
             "keyword": st.column_config.TextColumn("Keyword (contains)"),
             "category": st.column_config.SelectboxColumn("Category", options=category_list),
         },
+        key="rules_editor",
     )
 
     if st.button("⚙️ Apply rules and categorize"):
         st.session_state.rules_df = rules_editor
         st.session_state.df_all = apply_rules(st.session_state.df_all, rules_editor, default_category="Other")
-        st.success("Rules applied.")
+        st.success("Rules applied ✅")
 
     df_all = st.session_state.df_all
 
     st.subheader("Step 2 – Trends")
-    monthly = (
-        df_all[df_all["amount"] < 0]
-        .assign(spend=lambda x: x["amount"].abs())
-        .groupby(["month", "category"], as_index=False)["spend"]
-        .sum()
-        .pivot(index="month", columns="category", values="spend")
-        .fillna(0)
-    )
-    st.line_chart(monthly)
+
+    spend = df_all[df_all["amount"] < 0].copy()
+    spend["spend"] = spend["amount"].abs()
+
+    if spend.empty:
+        st.warning(
+            "No spend (negative amounts) detected. This usually means Debit/Credit sign handling is not applied.\n"
+            "Make sure you selected the **Debit/Credit** column in the mapping sidebar."
+        )
+    else:
+        monthly = (
+            spend.groupby(["month", "category"], as_index=False)["spend"]
+            .sum()
+            .pivot(index="month", columns="category", values="spend")
+            .fillna(0)
+        )
+        st.line_chart(monthly)
+
+        top_cat = spend.groupby("category", as_index=False)["spend"].sum().sort_values("spend", ascending=False)
+        st.bar_chart(top_cat.set_index("category"))
 
     st.subheader("Raw data")
     st.dataframe(df_all.sort_values("date"), use_container_width=True)
+
 
 if __name__ == "__main__":
     main()
