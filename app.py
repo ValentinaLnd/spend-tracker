@@ -7,8 +7,6 @@ st.set_page_config(page_title="Spending Tracker", layout="wide")
 DATA_PATH = Path("data")
 DATA_PATH.mkdir(exist_ok=True)
 
-# -------- CATEGORIES & RULES --------
-
 DEFAULT_CATEGORIES = [
     "Groceries",
     "Restaurants & Cafes",
@@ -27,114 +25,72 @@ DEFAULT_CATEGORIES = [
 ]
 
 DEFAULT_RULES = [
-    # Groceries
     {"keyword": "SPINNEYS", "category": "Groceries"},
     {"keyword": "CARREFOUR", "category": "Groceries"},
-    {"keyword": "GMG CONSUMER", "category": "Groceries"},
-    {"keyword": "LULU", "category": "Groceries"},
-    {"keyword": "WAITROSE", "category": "Groceries"},
-
-    # Restaurants & Cafes
     {"keyword": "DELIVEROO", "category": "Restaurants & Cafes"},
     {"keyword": "TALABAT", "category": "Restaurants & Cafes"},
-    {"keyword": "ZOMATO", "category": "Restaurants & Cafes"},
-    {"keyword": "STARBUCKS", "category": "Restaurants & Cafes"},
-    {"keyword": "PAUL", "category": "Restaurants & Cafes"},
-    {"keyword": "JBS RESTAURANT", "category": "Restaurants & Cafes"},
-
-    # Transport
     {"keyword": "UBER", "category": "Transport"},
     {"keyword": "CAREEM", "category": "Transport"},
     {"keyword": "RTA", "category": "Transport"},
-    {"keyword": "TAXI", "category": "Transport"},
-    {"keyword": "VALTRANS", "category": "Transport"},
     {"keyword": "SALIK", "category": "Transport"},
-
-    # Shopping
     {"keyword": "AMAZON", "category": "Shopping"},
     {"keyword": "NOON", "category": "Shopping"},
-    {"keyword": "DUBAI MALL", "category": "Shopping"},
-    {"keyword": "MALL OF THE EMIRATES", "category": "Shopping"},
-    {"keyword": "IKEA", "category": "Shopping"},
-    {"keyword": "ACE", "category": "Shopping"},
-
-    # Beauty
     {"keyword": "SEPHORA", "category": "Beauty"},
     {"keyword": "FACES", "category": "Beauty"},
-    {"keyword": "COSMETICS", "category": "Beauty"},
-    {"keyword": "THE BODY SHOP", "category": "Beauty"},
-    {"keyword": "KIKO", "category": "Beauty"},
-    {"keyword": "MAC COSMETICS", "category": "Beauty"},
-
-    # Fitness
     {"keyword": "FITNESS FIRST", "category": "Fitness"},
     {"keyword": "CLASS PASS", "category": "Fitness"},
-    {"keyword": "GYM", "category": "Fitness"},
-    {"keyword": "DECATHLON", "category": "Fitness"},
-
-    # Utilities & Bills
     {"keyword": "DEWA", "category": "Utilities & Bills"},
     {"keyword": "DU", "category": "Utilities & Bills"},
     {"keyword": "ETISALAT", "category": "Utilities & Bills"},
-    {"keyword": "EMARAT", "category": "Utilities & Bills"},
-    {"keyword": "URBAN COMPANY", "category": "Utilities & Bills"},
-
-    # Subscriptions
     {"keyword": "NETFLIX", "category": "Subscriptions"},
     {"keyword": "SPOTIFY", "category": "Subscriptions"},
-    {"keyword": "APPLE", "category": "Subscriptions"},
-    {"keyword": "GOOGLE", "category": "Subscriptions"},
-    {"keyword": "AMAZON PRIME", "category": "Subscriptions"},
-
-    # Healthcare
-    {"keyword": "PHARMACY", "category": "Healthcare"},
-    {"keyword": "CLINIC", "category": "Healthcare"},
-    {"keyword": "MEDICAL", "category": "Healthcare"},
-
-    # Travel
     {"keyword": "EMIRATES", "category": "Travel"},
-    {"keyword": "ETIHAD", "category": "Travel"},
-    {"keyword": "BOOKING.COM", "category": "Travel"},
-    {"keyword": "AIRBNB", "category": "Travel"},
 ]
 
+def try_read_first_file(files):
+    if not files:
+        return None
+    f = files[0]
+    name = f.name.lower()
+    if name.endswith(".csv"):
+        return pd.read_csv(f)
+    if name.endswith(".xlsx") or name.endswith(".xls"):
+        return pd.read_excel(f, engine="openpyxl")
+    return None
 
-# -------- HELPERS TO READ STATEMENTS --------
-
-def normalize_statement_df(df_raw: pd.DataFrame, account_name: str) -> pd.DataFrame:
-    """
-    Try to detect date / description / amount in a raw statement DataFrame.
-    Supports:
-    - single 'amount' column, or
-    - 'debit'/'credit' columns (builds signed amount).
-    """
+def normalize_statement_df(
+    df_raw: pd.DataFrame,
+    account_name: str,
+    date_col: str | None,
+    desc_col: str | None,
+    amount_col: str | None,
+    debit_col: str | None,
+    credit_col: str | None,
+) -> pd.DataFrame:
     df = df_raw.copy()
-    df.columns = [str(c).strip().lower() for c in df.columns]
+    df.columns = [str(c).strip() for c in df.columns]
 
-    date_col = next((c for c in df.columns if "date" in c), None)
-    desc_col = next(
-        (c for c in df.columns
-         if c.startswith("descr")
-         or "details" in c
-         or "narration" in c
-         or "description" in c),
-        None,
-    )
-    amount_col = next((c for c in df.columns if "amount" in c or "amt" in c), None)
-    debit_col = next((c for c in df.columns if "debit" in c), None)
-    credit_col = next((c for c in df.columns if "credit" in c), None)
+    def val_or_none(x):
+        return None if (x is None or x == "(auto)") else x
 
-    if amount_col is None and (debit_col is not None or credit_col is not None):
-        # Build signed amount from debit / credit
-        df["__amount_tmp_debit"] = pd.to_numeric(df.get(debit_col), errors="coerce").fillna(0)
-        df["__amount_tmp_credit"] = pd.to_numeric(df.get(credit_col), errors="coerce").fillna(0)
-        df["amount"] = df["__amount_tmp_credit"] - df["__amount_tmp_debit"]
-        amount_col = "amount"
+    date_col = val_or_none(date_col)
+    desc_col = val_or_none(desc_col)
+    amount_col = val_or_none(amount_col)
+    debit_col = val_or_none(debit_col)
+    credit_col = val_or_none(credit_col)
+
+    # If user selected debit/credit, build a signed amount
+    if amount_col is None and (debit_col or credit_col):
+        debit_series = pd.to_numeric(df[debit_col], errors="coerce").fillna(0) if debit_col else 0
+        credit_series = pd.to_numeric(df[credit_col], errors="coerce").fillna(0) if credit_col else 0
+        df["__amount"] = credit_series - debit_series
+        amount_col = "__amount"
 
     if not all([date_col, desc_col, amount_col]):
         raise ValueError(
-            f"Could not detect date/description/amount columns. "
-            f"Detected date: {date_col}, description: {desc_col}, amount: {amount_col}"
+            "Column mapping is required for your file.\n"
+            f"Columns found: {list(df.columns)}\n"
+            "Please select Date + Description + (Amount OR Debit/Credit) from the sidebar."
         )
 
     tmp = pd.DataFrame(
@@ -150,11 +106,7 @@ def normalize_statement_df(df_raw: pd.DataFrame, account_name: str) -> pd.DataFr
     tmp["year"] = tmp["date"].dt.year
     return tmp
 
-
-def load_and_clean_any(files, account_name: str) -> pd.DataFrame:
-    """
-    Load statements that can be CSV or Excel (XLSX/XLS).
-    """
+def load_and_clean(files, account_name, mapping):
     dfs = []
     for f in files:
         name = f.name.lower()
@@ -163,226 +115,129 @@ def load_and_clean_any(files, account_name: str) -> pd.DataFrame:
         elif name.endswith(".xlsx") or name.endswith(".xls"):
             df_raw = pd.read_excel(f, engine="openpyxl")
         else:
-            raise ValueError(f"Unsupported file type for {f.name}. Please upload CSV or Excel (XLSX/XLS).")
+            raise ValueError(f"Unsupported file type: {f.name}")
 
-        tmp = normalize_statement_df(df_raw, account_name)
+        tmp = normalize_statement_df(
+            df_raw,
+            account_name,
+            mapping["date_col"],
+            mapping["desc_col"],
+            mapping["amount_col"],
+            mapping["debit_col"],
+            mapping["credit_col"],
+        )
         dfs.append(tmp)
-
     return pd.concat(dfs, ignore_index=True)
 
-
 def apply_rules(df: pd.DataFrame, rules_df: pd.DataFrame, default_category: str = "Other") -> pd.DataFrame:
-    """
-    Apply keyword rules to descriptions.
-    Anything not matching any rule stays as `default_category` (Other).
-    """
     df = df.copy()
     desc = df["description"].fillna("").str.upper()
     categories = pd.Series(default_category, index=df.index)
-
     for _, row in rules_df.iterrows():
         kw = str(row.get("keyword", "")).strip().upper()
         cat = str(row.get("category", "")).strip()
         if not kw or not cat:
             continue
-        mask = desc.str.contains(kw, na=False)
-        categories[mask] = cat
-
+        categories[desc.str.contains(kw, na=False)] = cat
     df["category"] = categories
     return df
 
-
-# -------- MAIN APP --------
-
 def main():
-    st.title("💳 12-Month Spending Tracker (CSV & Excel, Auto-categorized)")
+    st.title("💳 12-Month Spending Tracker (Excel/CSV, Auto-categorized)")
 
-    # --- Sidebar: upload + config ---
-    st.sidebar.header("1. Upload bank statements")
-    st.sidebar.write("Upload CSV or Excel (XLSX/XLS) statements for each account.")
-
-    acc1_files = st.sidebar.file_uploader(
-        "Account 1 files (CSV or Excel)",
-        type=["csv", "xlsx", "xls"],
-        accept_multiple_files=True,
-        key="acc1",
-    )
-    acc2_files = st.sidebar.file_uploader(
-        "Account 2 files (CSV or Excel)",
-        type=["csv", "xlsx", "xls"],
-        accept_multiple_files=True,
-        key="acc2",
-    )
+    st.sidebar.header("1. Upload files")
+    acc1_files = st.sidebar.file_uploader("Account 1 (CSV/XLSX)", type=["csv", "xlsx", "xls"], accept_multiple_files=True)
+    acc2_files = st.sidebar.file_uploader("Account 2 (CSV/XLSX)", type=["csv", "xlsx", "xls"], accept_multiple_files=True)
 
     account1_name = st.sidebar.text_input("Account 1 name", value="Account 1")
     account2_name = st.sidebar.text_input("Account 2 name", value="Account 2")
 
+    st.sidebar.header("0. Column mapping (required for your exports)")
+    sample_df = try_read_first_file(acc1_files or acc2_files)
+    sample_cols = list(sample_df.columns) if sample_df is not None else []
+
+    date_col = st.sidebar.selectbox("Date column", ["(auto)"] + [str(c) for c in sample_cols])
+    desc_col = st.sidebar.selectbox("Description column", ["(auto)"] + [str(c) for c in sample_cols])
+
+    mode = st.sidebar.radio("Amount mode", ["Single Amount column", "Debit + Credit columns"])
+    amount_col = "(auto)"
+    debit_col = "(auto)"
+    credit_col = "(auto)"
+    if mode == "Single Amount column":
+        amount_col = st.sidebar.selectbox("Amount column", ["(auto)"] + [str(c) for c in sample_cols])
+    else:
+        debit_col = st.sidebar.selectbox("Debit column", ["(auto)"] + [str(c) for c in sample_cols])
+        credit_col = st.sidebar.selectbox("Credit column", ["(auto)"] + [str(c) for c in sample_cols])
+
+    mapping = {
+        "date_col": date_col,
+        "desc_col": desc_col,
+        "amount_col": amount_col if mode == "Single Amount column" else "(auto)",
+        "debit_col": debit_col if mode != "Single Amount column" else "(auto)",
+        "credit_col": credit_col if mode != "Single Amount column" else "(auto)",
+    }
+
     st.sidebar.header("2. Categories")
-    categories_text = st.sidebar.text_area(
-        "Edit categories (one per line)",
-        value="\n".join(DEFAULT_CATEGORIES),
-        height=200,
-    )
+    categories_text = st.sidebar.text_area("Categories (one per line)", value="\n".join(DEFAULT_CATEGORIES), height=220)
     category_list = [c.strip() for c in categories_text.splitlines() if c.strip()]
 
-    st.sidebar.header("3. Keyword rules")
-    st.sidebar.write("Each rule: if description contains keyword, assign category.")
-
+    st.sidebar.header("3. Rules")
     if "rules_df" not in st.session_state:
         st.session_state.rules_df = pd.DataFrame(DEFAULT_RULES)
-
-    rules_df = st.session_state.rules_df
 
     if "df_all" not in st.session_state:
         st.session_state.df_all = None
 
-    # --- Load and combine data ---
     if st.button("Load & combine data", type="primary"):
-        if not acc1_files and not acc2_files:
-            st.warning("Please upload at least one CSV or Excel file.")
-        else:
-            try:
-                all_dfs = []
-                if acc1_files:
-                    all_dfs.append(load_and_clean_any(acc1_files, account1_name))
-                if acc2_files:
-                    all_dfs.append(load_and_clean_any(acc2_files, account2_name))
-                df_all = pd.concat(all_dfs, ignore_index=True)
-                df_all = df_all.sort_values("date")
-                df_all["category"] = "Other"
-                st.session_state.df_all = df_all
-            except Exception as e:
-                st.error(f"Error loading statements: {e}")
-                return
+        try:
+            all_dfs = []
+            if acc1_files:
+                all_dfs.append(load_and_clean(acc1_files, account1_name, mapping))
+            if acc2_files:
+                all_dfs.append(load_and_clean(acc2_files, account2_name, mapping))
+            df_all = pd.concat(all_dfs, ignore_index=True).sort_values("date")
+            df_all["category"] = "Other"
+            st.session_state.df_all = df_all
+        except Exception as e:
+            st.error(f"Error loading statements: {e}")
+            return
 
     df_all = st.session_state.df_all
     if df_all is None:
-        st.info("Upload your CSV/Excel files and click **Load & combine data** to get started.")
+        st.info("Upload files, choose column mapping in the sidebar, then click **Load & combine data**.")
         return
 
-    # --- Step 1: rules editor ---
-    st.subheader("Step 1 – Define / update auto-categorisation rules")
+    st.subheader("Step 1 – Rules (auto-categorisation)")
     rules_editor = st.data_editor(
-        rules_df,
+        st.session_state.rules_df,
         num_rows="dynamic",
         use_container_width=True,
         column_config={
             "keyword": st.column_config.TextColumn("Keyword (contains)"),
-            "category": st.column_config.SelectboxColumn(
-                "Category",
-                options=category_list,
-            ),
+            "category": st.column_config.SelectboxColumn("Category", options=category_list),
         },
-        key="rules_editor",
     )
 
-    col_apply1, col_apply2 = st.columns([1, 2])
-    with col_apply1:
-        if st.button("⚙️ Apply rules and categorize"):
-            st.session_state.rules_df = rules_editor
-            df_all = apply_rules(st.session_state.df_all, rules_editor, default_category="Other")
-            st.session_state.df_all = df_all
-            st.success("Rules applied. Transactions have been auto-categorized.")
-
-    with col_apply2:
-        if st.button("💾 Save categorized data to CSV"):
-            if st.session_state.df_all is None:
-                st.warning("No data to save yet.")
-            else:
-                output_file = DATA_PATH / "transactions_categorized.csv"
-                st.session_state.df_all.to_csv(output_file, index=False)
-                st.success(f"Saved to {output_file.resolve()}")
+    if st.button("⚙️ Apply rules and categorize"):
+        st.session_state.rules_df = rules_editor
+        st.session_state.df_all = apply_rules(st.session_state.df_all, rules_editor, default_category="Other")
+        st.success("Rules applied.")
 
     df_all = st.session_state.df_all
-    if df_all is None or df_all.empty:
-        st.warning("No data to analyze yet.")
-        return
 
-    # --- Step 2: filters + KPIs ---
-    st.subheader("Step 2 – Overview and filters")
+    st.subheader("Step 2 – Trends")
+    monthly = (
+        df_all[df_all["amount"] < 0]
+        .assign(spend=lambda x: x["amount"].abs())
+        .groupby(["month", "category"], as_index=False)["spend"]
+        .sum()
+        .pivot(index="month", columns="category", values="spend")
+        .fillna(0)
+    )
+    st.line_chart(monthly)
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        min_date = df_all["date"].min()
-        max_date = df_all["date"].max()
-        date_range = st.date_input(
-            "Date range",
-            value=(min_date, max_date),
-            min_value=min_date,
-            max_value=max_date,
-        )
-    with col2:
-        selected_accounts = st.multiselect(
-            "Accounts",
-            sorted(df_all["account"].unique()),
-            default=list(sorted(df_all["account"].unique())),
-        )
-    with col3:
-        selected_categories = st.multiselect(
-            "Categories",
-            sorted(df_all["category"].unique()),
-            default=list(sorted(df_all["category"].unique())),
-        )
-
-    filtered = df_all.copy()
-    if isinstance(date_range, tuple) and len(date_range) == 2:
-        start, end = date_range
-        filtered = filtered[
-            (filtered["date"] >= pd.to_datetime(start))
-            & (filtered["date"] <= pd.to_datetime(end))
-        ]
-    if selected_accounts:
-        filtered = filtered[filtered["account"].isin(selected_accounts)]
-    if selected_categories:
-        filtered = filtered[filtered["category"].isin(selected_categories)]
-
-    total_spend = filtered.loc[filtered["amount"] < 0, "amount"].sum()
-    total_income = filtered.loc[filtered["amount"] > 0, "amount"].sum()
-
-    m1, m2, m3 = st.columns(3)
-    with m1:
-        st.metric("Total spend", f"{total_spend:,.2f}")
-    with m2:
-        st.metric("Total income", f"{total_income:,.2f}")
-    with m3:
-        st.metric("Net", f"{(total_income + total_spend):,.2f}")
-
-    # --- Step 3: trends ---
-    st.subheader("Step 3 – Trends")
-
-    col_left, col_right = st.columns(2)
-    with col_left:
-        st.markdown("**Monthly spend by category**")
-        monthly_cat = (
-            filtered[filtered["amount"] < 0]
-            .assign(amount=lambda x: x["amount"].abs())
-            .groupby(["month", "category"], as_index=False)["amount"]
-            .sum()
-        )
-        if not monthly_cat.empty:
-            pivot = monthly_cat.pivot(index="month", columns="category", values="amount").fillna(0)
-            st.line_chart(pivot)
-        else:
-            st.write("No spending data in this period.")
-
-    with col_right:
-        st.markdown("**Top categories by spend**")
-        cat_totals = (
-            filtered[filtered["amount"] < 0]
-            .assign(amount=lambda x: x["amount"].abs())
-            .groupby("category", as_index=False)["amount"]
-            .sum()
-            .sort_values("amount", ascending=False)
-        )
-        if not cat_totals.empty:
-            st.bar_chart(cat_totals.set_index("category"))
-        else:
-            st.write("No spending data in this period.")
-
-    # --- Raw data ---
-    st.subheader("Raw filtered data (auto-categorized)")
-    st.dataframe(filtered.sort_values("date"), use_container_width=True)
-
+    st.subheader("Raw data")
+    st.dataframe(df_all.sort_values("date"), use_container_width=True)
 
 if __name__ == "__main__":
     main()
