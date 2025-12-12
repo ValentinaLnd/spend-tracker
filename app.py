@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 from pathlib import Path
-import pdfplumber
 
 st.set_page_config(page_title="Spending Tracker", layout="wide")
 
@@ -102,28 +101,6 @@ DEFAULT_RULES = [
 
 # -------- HELPERS TO READ STATEMENTS --------
 
-def pdf_to_df(file) -> pd.DataFrame:
-    """
-    Extract tables from a PDF into a DataFrame.
-    This assumes the PDF has real text tables (not scanned images).
-    """
-    dfs = []
-    with pdfplumber.open(file) as pdf:
-        for page in pdf.pages:
-            tables = page.extract_tables()
-            for table in tables:
-                if not table or len(table) < 2:
-                    continue
-                header = table[0]
-                rows = table[1:]
-                df_page = pd.DataFrame(rows, columns=header)
-                dfs.append(df_page)
-
-    if not dfs:
-        raise ValueError("No tables found in PDF. The statement format may not be supported.")
-    return pd.concat(dfs, ignore_index=True)
-
-
 def normalize_statement_df(df_raw: pd.DataFrame, account_name: str) -> pd.DataFrame:
     """
     Try to detect date / description / amount in a raw statement DataFrame.
@@ -137,7 +114,10 @@ def normalize_statement_df(df_raw: pd.DataFrame, account_name: str) -> pd.DataFr
     date_col = next((c for c in df.columns if "date" in c), None)
     desc_col = next(
         (c for c in df.columns
-         if c.startswith("descr") or "details" in c or "narration" in c or "description" in c),
+         if c.startswith("descr")
+         or "details" in c
+         or "narration" in c
+         or "description" in c),
         None,
     )
     amount_col = next((c for c in df.columns if "amount" in c or "amt" in c), None)
@@ -173,17 +153,18 @@ def normalize_statement_df(df_raw: pd.DataFrame, account_name: str) -> pd.DataFr
 
 def load_and_clean_any(files, account_name: str) -> pd.DataFrame:
     """
-    Load statements that can be CSV or PDF.
+    Load statements that can be CSV or Excel (XLSX/XLS).
     """
     dfs = []
     for f in files:
         name = f.name.lower()
         if name.endswith(".csv"):
             df_raw = pd.read_csv(f)
-        elif name.endswith(".pdf"):
-            df_raw = pdf_to_df(f)
+        elif name.endswith(".xlsx") or name.endswith(".xls"):
+            df_raw = pd.read_excel(f, engine="openpyxl")
         else:
-            raise ValueError(f"Unsupported file type for {f.name}. Only CSV and PDF are accepted.")
+            raise ValueError(f"Unsupported file type for {f.name}. Please upload CSV or Excel (XLSX/XLS).")
+
         tmp = normalize_statement_df(df_raw, account_name)
         dfs.append(tmp)
 
@@ -214,21 +195,21 @@ def apply_rules(df: pd.DataFrame, rules_df: pd.DataFrame, default_category: str 
 # -------- MAIN APP --------
 
 def main():
-    st.title("💳 12-Month Spending Tracker (PDF & CSV, Auto-categorized)")
+    st.title("💳 12-Month Spending Tracker (CSV & Excel, Auto-categorized)")
 
     # --- Sidebar: upload + config ---
     st.sidebar.header("1. Upload bank statements")
-    st.sidebar.write("Upload CSV or PDF statements for each account.")
+    st.sidebar.write("Upload CSV or Excel (XLSX/XLS) statements for each account.")
 
     acc1_files = st.sidebar.file_uploader(
-        "Account 1 files (CSV or PDF)",
-        type=["csv", "pdf"],
+        "Account 1 files (CSV or Excel)",
+        type=["csv", "xlsx", "xls"],
         accept_multiple_files=True,
         key="acc1",
     )
     acc2_files = st.sidebar.file_uploader(
-        "Account 2 files (CSV or PDF)",
-        type=["csv", "pdf"],
+        "Account 2 files (CSV or Excel)",
+        type=["csv", "xlsx", "xls"],
         accept_multiple_files=True,
         key="acc2",
     )
@@ -258,7 +239,7 @@ def main():
     # --- Load and combine data ---
     if st.button("Load & combine data", type="primary"):
         if not acc1_files and not acc2_files:
-            st.warning("Please upload at least one CSV or PDF file.")
+            st.warning("Please upload at least one CSV or Excel file.")
         else:
             try:
                 all_dfs = []
@@ -276,7 +257,7 @@ def main():
 
     df_all = st.session_state.df_all
     if df_all is None:
-        st.info("Upload your CSV/PDF files and click **Load & combine data** to get started.")
+        st.info("Upload your CSV/Excel files and click **Load & combine data** to get started.")
         return
 
     # --- Step 1: rules editor ---
