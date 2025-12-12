@@ -1,6 +1,9 @@
-import streamlit as st
-import pandas as pd
+import io
+import re
 from pathlib import Path
+
+import pandas as pd
+import streamlit as st
 
 st.set_page_config(page_title="Spending Tracker", layout="wide")
 
@@ -57,7 +60,6 @@ DEFAULT_RULES = [
     {"keyword": "SEPHORA", "category": "Beauty"},
     {"keyword": "FACES", "category": "Beauty"},
     {"keyword": "TIPS & TOES", "category": "Beauty"},
-    {"keyword": "TIPSTOES", "category": "Beauty"},
     {"keyword": "BEAUTY", "category": "Beauty"},
     {"keyword": "THE BODY SHOP", "category": "Beauty"},
     {"keyword": "KIKO", "category": "Beauty"},
@@ -95,41 +97,32 @@ DEFAULT_RULES = [
 ]
 
 
+# ---------------------------
+# Parsing helpers (your bank format)
+# ---------------------------
+
 def parse_money(series: pd.Series) -> pd.Series:
     """
-    Parse amounts like '53,00' -> 53.00 (float).
-    Removes spaces, converts comma decimal to dot.
+    Parses amounts like '53,00' -> 53.00, removes spaces, keeps digits/dot/minus.
     """
     s = series.astype(str).str.strip()
     s = s.str.replace(" ", "", regex=False)
     s = s.str.replace(",", ".", regex=False)
-    # Remove any non-numeric except dot and minus (just in case)
     s = s.str.replace(r"[^0-9\.\-]", "", regex=True)
     return pd.to_numeric(s, errors="coerce")
 
 
-def apply_rules(df: pd.DataFrame, rules_df: pd.DataFrame, default_category: str = "Other") -> pd.DataFrame:
-    df = df.copy()
-    desc = df["description"].fillna("").str.upper()
-    categories = pd.Series(default_category, index=df.index)
+def read_file_to_df(f) -> pd.DataFrame:
+    name = f.name.lower()
+    if name.endswith(".csv"):
+        df = pd.read_csv(f)
+    elif name.endswith(".xlsx") or name.endswith(".xls"):
+        df = pd.read_excel(f, engine="openpyxl")
+    else:
+        raise ValueError(f"Unsupported file type: {f.name}. Please upload CSV or Excel (XLSX/XLS).")
 
-    for _, row in rules_df.iterrows():
-        kw = str(row.get("keyword", "")).strip().upper()
-        cat = str(row.get("category", "")).strip()
-        if not kw or not cat:
-            continue
-        categories[desc.str.contains(kw, na=False)] = cat
-
-    df["category"] = categories
+    df.columns = [str(c).strip() for c in df.columns]
     return df
-
-
-def detect_cols(cols_lower: list[str], needle_options: list[str]) -> str | None:
-    for c in cols_lower:
-        for n in needle_options:
-            if n in c:
-                return c
-    return None
 
 
 def normalize_statement_df(
@@ -140,10 +133,13 @@ def normalize_statement_df(
     amount_col: str | None,
     dc_col: str | None,
 ) -> pd.DataFrame:
+    """
+    Expects columns like:
+      Date | Details | Amount | Currency | Debit/Credit | Status
+    Converts Debit rows to negative amounts.
+    """
     df = df_raw.copy()
     df.columns = [str(c).strip() for c in df.columns]
-
-    cols_lower_map = {c: c.lower() for c in df.columns}
 
     def to_none(v):
         return None if (v is None or v == "(auto)") else v
@@ -153,16 +149,15 @@ def normalize_statement_df(
     amount_col = to_none(amount_col)
     dc_col = to_none(dc_col)
 
-    # Auto-detect if user kept "(auto)"
+    # Auto-detect if user left "(auto)"
     if date_col is None:
-        date_col = next((c for c in df.columns if "date" in cols_lower_map[c]), None)
+        date_col = next((c for c in df.columns if "date" in c.lower()), None)
     if desc_col is None:
-        desc_col = next((c for c in df.columns if cols_lower_map[c] in ["details", "description", "narration"]), None)
+        desc_col = next((c for c in df.columns if c.lower() in ["details", "description", "narration"]), None)
     if amount_col is None:
-        amount_col = next((c for c in df.columns if "amount" in cols_lower_map[c] or "amt" in cols_lower_map[c]), None)
+        amount_col = next((c for c in df.columns if "amount" in c.lower() or "amt" in c.lower()), None)
     if dc_col is None:
-        # your file uses "Debit/Credit"
-        dc_col = next((c for c in df.columns if "debit/credit" in cols_lower_map[c] or "debit credit" in cols_lower_map[c]), None)
+        dc_col = next((c for c in df.columns if "debit/credit" in c.lower() or "debit credit" in c.lower()), None)
 
     if not all([date_col, desc_col, amount_col]):
         raise ValueError(
@@ -179,7 +174,7 @@ def normalize_statement_df(
         }
     )
 
-    # Flip sign for debits (spend)
+    # Debit => negative spend
     if dc_col is not None:
         dc = df[dc_col].astype(str).str.upper().str.strip()
         tmp.loc[dc == "DEBIT", "amount"] *= -1
@@ -191,20 +186,11 @@ def normalize_statement_df(
 
     if tmp.empty:
         raise ValueError(
-            "0 rows parsed after cleaning. Likely wrong column mapping or unreadable date/amount format.\n"
-            "Tip: Date should look like '30 Jan 2025', Amount like '53,00', and Debit/Credit should be 'Debit'/'Credit'."
+            "0 rows parsed after cleaning.\n"
+            "Make sure Date/Details/Amount are selected and Amount is numeric (e.g. 53,00)."
         )
 
     return tmp
-
-
-def read_file_to_df(f) -> pd.DataFrame:
-    name = f.name.lower()
-    if name.endswith(".csv"):
-        return pd.read_csv(f)
-    if name.endswith(".xlsx") or name.endswith(".xls"):
-        return pd.read_excel(f, engine="openpyxl")
-    raise ValueError(f"Unsupported file type: {f.name}. Please upload CSV or Excel (XLSX/XLS).")
 
 
 def load_and_clean(files, account_name: str, mapping: dict) -> pd.DataFrame:
@@ -222,6 +208,61 @@ def load_and_clean(files, account_name: str, mapping: dict) -> pd.DataFrame:
         dfs.append(tmp)
     return pd.concat(dfs, ignore_index=True)
 
+
+# ---------------------------
+# Categorisation
+# ---------------------------
+
+def apply_rules(df: pd.DataFrame, rules_df: pd.DataFrame, default_category: str = "Other") -> pd.DataFrame:
+    df = df.copy()
+    desc = df["description"].fillna("").str.upper()
+    categories = pd.Series(default_category, index=df.index)
+
+    for _, row in rules_df.iterrows():
+        kw = str(row.get("keyword", "")).strip().upper()
+        cat = str(row.get("category", "")).strip()
+        if not kw or not cat:
+            continue
+        categories[desc.str.contains(kw, na=False)] = cat
+
+    df["category"] = categories
+    return df
+
+
+# ---------------------------
+# Export (Google Sheets-friendly)
+# ---------------------------
+
+def safe_sheet_name(name: str) -> str:
+    # Excel sheet name rules: max 31 chars, no : \ / ? * [ ]
+    name = re.sub(r'[:\\/?*\[\]]', "-", name)
+    return name[:31]
+
+
+def build_monthly_excel(df: pd.DataFrame) -> bytes:
+    """
+    Excel output:
+      - All
+      - One sheet per month (YYYY-MM)
+    Upload to Google Drive and open with Google Sheets -> tabs appear.
+    """
+    output = io.BytesIO()
+    df_sorted = df.sort_values(["month", "date"]).copy()
+
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df_sorted.to_excel(writer, index=False, sheet_name="All")
+
+        for month in sorted(df_sorted["month"].unique()):
+            sheet = safe_sheet_name(str(month))
+            df_m = df_sorted[df_sorted["month"] == month]
+            df_m.to_excel(writer, index=False, sheet_name=sheet)
+
+    return output.getvalue()
+
+
+# ---------------------------
+# App
+# ---------------------------
 
 def main():
     st.title("💳 12-Month Spending Tracker (Excel/CSV, Auto-categorized)")
@@ -245,7 +286,6 @@ def main():
 
     st.sidebar.header("0. Column mapping (for your export format)")
 
-    sample_df = None
     sample_cols = []
     try:
         sample_file = (acc1_files or acc2_files or [None])[0]
@@ -255,11 +295,10 @@ def main():
     except Exception:
         sample_cols = []
 
-    # Your real headers: Date, Details, Amount, Debit/Credit
     date_pick = st.sidebar.selectbox("Date column", ["(auto)"] + sample_cols, index=0)
     desc_pick = st.sidebar.selectbox("Description column", ["(auto)"] + sample_cols, index=0)
     amount_pick = st.sidebar.selectbox("Amount column", ["(auto)"] + sample_cols, index=0)
-    dc_pick = st.sidebar.selectbox("Debit/Credit column (optional but recommended)", ["(auto)"] + sample_cols, index=0)
+    dc_pick = st.sidebar.selectbox("Debit/Credit column (recommended)", ["(auto)"] + sample_cols, index=0)
 
     mapping = {
         "date_col": date_pick,
@@ -269,7 +308,11 @@ def main():
     }
 
     st.sidebar.header("2. Categories")
-    categories_text = st.sidebar.text_area("Categories (one per line)", value="\n".join(DEFAULT_CATEGORIES), height=220)
+    categories_text = st.sidebar.text_area(
+        "Categories (one per line)",
+        value="\n".join(DEFAULT_CATEGORIES),
+        height=220,
+    )
     category_list = [c.strip() for c in categories_text.splitlines() if c.strip()]
 
     if "rules_df" not in st.session_state:
@@ -298,9 +341,10 @@ def main():
 
     df_all = st.session_state.df_all
     if df_all is None:
-        st.info("Upload files, choose mapping (Date/Details/Amount/Debit-Credit), then click **Load & combine data**.")
-        st.markdown(
-            "For your file, pick: **Date → Date**, **Description → Details**, **Amount → Amount**, **Debit/Credit → Debit/Credit**."
+        st.info(
+            "Upload files, choose mapping (Date/Details/Amount/Debit-Credit), then click **Load & combine data**.\n\n"
+            "For your file, pick: **Date → Date**, **Description → Details**, **Amount → Amount**, "
+            "**Debit/Credit → Debit/Credit**."
         )
         return
 
@@ -330,8 +374,7 @@ def main():
 
     if spend.empty:
         st.warning(
-            "No spend (negative amounts) detected. This usually means Debit/Credit sign handling is not applied.\n"
-            "Make sure you selected the **Debit/Credit** column in the mapping sidebar."
+            "No spend (negative amounts) detected. Ensure you selected the **Debit/Credit** column in mapping."
         )
     else:
         monthly = (
@@ -344,6 +387,18 @@ def main():
 
         top_cat = spend.groupby("category", as_index=False)["spend"].sum().sort_values("spend", ascending=False)
         st.bar_chart(top_cat.set_index("category"))
+
+    st.subheader("Export to Google Sheets (tabs per month)")
+
+    xlsx_bytes = build_monthly_excel(df_all.sort_values(["month", "date"]))
+    st.download_button(
+        label="⬇️ Download Excel (one tab per month) for Google Sheets",
+        data=xlsx_bytes,
+        file_name="spend_tracker_monthly_tabs.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+    st.caption("To use in Google Sheets: upload this file to Google Drive → Open with Google Sheets.")
 
     st.subheader("Raw data")
     st.dataframe(df_all.sort_values("date"), use_container_width=True)
