@@ -8,10 +8,10 @@ st.set_page_config(page_title="Spend Tracker — Categorise", layout="wide")
 
 
 # ---------------------------
-# Approved categories + rules
+# Fixed approved categories + default rules (stable)
 # ---------------------------
 
-DEFAULT_CATEGORIES = [
+CATEGORIES = [
     "Groceries",
     "Restaurants & Cafes",
     "Food delivery",
@@ -61,6 +61,7 @@ DEFAULT_RULES = [
 
     # Parking
     {"keyword": "PARKING", "category": "Parking"},
+    {"keyword": "PARKONIC", "category": "Parking"},
 
     # Shopping
     {"keyword": "AMAZON", "category": "Shopping"},
@@ -80,13 +81,15 @@ DEFAULT_RULES = [
     # Fitness
     {"keyword": "FITNESS FIRST", "category": "Fitness"},
     {"keyword": "CLASS PASS", "category": "Fitness"},
+    {"keyword": "CLASSPASS", "category": "Fitness"},
     {"keyword": "GYM", "category": "Fitness"},
     {"keyword": "DECATHLON", "category": "Fitness"},
 
     # Utilities & Bills
     {"keyword": "DEWA", "category": "Utilities & Bills"},
-    {"keyword": "DU", "category": "Utilities & Bills"},
+    {"keyword": "DUBAI ELECTRICITY", "category": "Utilities & Bills"},
     {"keyword": "ETISALAT", "category": "Utilities & Bills"},
+    {"keyword": "DU", "category": "Utilities & Bills"},
 
     # Subscriptions
     {"keyword": "NETFLIX", "category": "Subscriptions"},
@@ -98,21 +101,10 @@ DEFAULT_RULES = [
 
 
 # ---------------------------
-# Input loader: 2 columns (Date + Details) — KEEP ALL ROWS
+# Input loader: 2 columns (Date + Details) — keep ALL rows + preserve order
 # ---------------------------
 
 def read_two_col_export(file) -> pd.DataFrame:
-    """
-    Supports XLSX/CSV with:
-      - Column A: Date
-      - Column B: Details
-    Headers optional.
-
-    IMPORTANT:
-      - Does NOT drop rows.
-      - Adds row_id to preserve original order.
-      - Adds row_status to explain non-transaction rows.
-    """
     name = file.name.lower()
 
     if name.endswith(".xlsx") or name.endswith(".xls"):
@@ -128,7 +120,7 @@ def read_two_col_export(file) -> pd.DataFrame:
     col0 = raw.iloc[:, 0]
     col1 = raw.iloc[:, 1]
 
-    # Detect a header row like: "Date" | "Details"
+    # Optional header detection
     first0 = str(col0.iloc[0]).strip().lower() if len(col0) else ""
     first1 = str(col1.iloc[0]).strip().lower() if len(col1) else ""
     has_header = ("date" in first0) and ("detail" in first1 or "description" in first1)
@@ -142,50 +134,41 @@ def read_two_col_export(file) -> pd.DataFrame:
 
     df = pd.DataFrame(
         {
-            "row_id": range(len(col0)),       # preserves original order
-            "date_raw": col0,                 # keep original value for debugging
+            "row_id": range(len(col0)),
+            "date_raw": col0,
             "details": col1.astype(str).fillna("").str.strip(),
         }
     )
 
-    # Parse date (but do NOT drop rows)
     df["date"] = pd.to_datetime(df["date_raw"], errors="coerce", dayfirst=True)
 
-    # Flag row issues
     df["row_status"] = "OK"
     df.loc[df["date"].isna(), "row_status"] = "INVALID_DATE"
     df.loc[df["details"].str.strip().eq(""), "row_status"] = "EMPTY_DETAILS"
 
-    # Optional month (blank if invalid date)
     df["month"] = df["date"].dt.to_period("M").astype(str)
-
     return df
 
 
 # ---------------------------
-# Categorisation (keyword contains, fill empty only, ONLY for OK rows)
+# Categorisation: keyword contains, fill empty only, OK rows only
 # ---------------------------
 
-def apply_rules_fill_empty_only(
-    df: pd.DataFrame,
-    rules_df: pd.DataFrame,
-    default_category: str = "Other",
-) -> pd.DataFrame:
+def apply_rules_fill_empty_only(df: pd.DataFrame, rules_df: pd.DataFrame, default_category: str = "Other") -> pd.DataFrame:
     df = df.copy()
-
     if "category" not in df.columns:
         df["category"] = ""
 
-    ok_mask = df.get("row_status", "OK").eq("OK")
+    ok_mask = df["row_status"].eq("OK")
 
     desc = df["details"].fillna("").astype(str).str.upper()
     cats = df["category"].fillna("").astype(str)
 
-    empty_mask = cats.str.strip() == ""
-    target_mask = ok_mask & empty_mask
+    empty_mask = cats.str.strip().eq("")
+    target = ok_mask & empty_mask
 
     result = cats.copy()
-    result.loc[target_mask] = default_category
+    result.loc[target] = default_category
 
     for _, row in rules_df.iterrows():
         kw = str(row.get("keyword", "")).strip().upper()
@@ -193,15 +176,11 @@ def apply_rules_fill_empty_only(
         if not kw or not cat:
             continue
         hit = desc.str.contains(re.escape(kw), na=False)
-        result.loc[target_mask & hit] = cat
+        result.loc[target & hit] = cat
 
     df["category"] = result
     return df
 
-
-# ---------------------------
-# Export: download exactly what is shown (same order)
-# ---------------------------
 
 def build_exact_export_xlsx(df: pd.DataFrame) -> bytes:
     buf = io.BytesIO()
@@ -217,70 +196,51 @@ def build_exact_export_xlsx(df: pd.DataFrame) -> bytes:
 def main():
     st.title("💳 Spend Tracker — Categorise Expenses")
 
-    st.sidebar.header("1) Upload your file(s)")
-    st.sidebar.write("Upload XLSX or CSV with **2 columns**: **Date** + **Details** (headers optional).")
-
-    files = st.sidebar.file_uploader(
-        "Upload files",
-        type=["xlsx", "xls", "csv"],
-        accept_multiple_files=True,
-    )
-
-    st.sidebar.header("2) Categories")
-    categories_text = st.sidebar.text_area(
-        "Categories (one per line)",
-        value="\n".join(DEFAULT_CATEGORIES),
-        height=220,
-    )
-    category_list = [c.strip() for c in categories_text.splitlines() if c.strip()]
-
+    # Session state
     if "rules_df" not in st.session_state:
         st.session_state.rules_df = pd.DataFrame(DEFAULT_RULES)
     if "df_all" not in st.session_state:
         st.session_state.df_all = None
 
-    if st.button("Load & combine data", type="primary"):
+    st.sidebar.header("1) Upload")
+    files = st.sidebar.file_uploader(
+        "XLSX/CSV with 2 columns: Date + Details",
+        type=["xlsx", "xls", "csv"],
+        accept_multiple_files=True,
+    )
+
+    st.sidebar.header("2) Rules")
+    if st.sidebar.button("Reset rules to default"):
+        st.session_state.rules_df = pd.DataFrame(DEFAULT_RULES)
+        st.sidebar.success("Rules reset ✅")
+
+    if st.sidebar.button("Load & combine data", type="primary"):
         if not files:
-            st.warning("Upload at least one file.")
+            st.sidebar.warning("Upload at least one file.")
         else:
-            try:
-                dfs = []
-                for f in files:
-                    df_part = read_two_col_export(f)
-                    df_part["source_file"] = f.name  # helps trace issues
-                    dfs.append(df_part)
+            dfs = []
+            for f in files:
+                df_part = read_two_col_export(f)
+                df_part["source_file"] = f.name
+                dfs.append(df_part)
 
-                df_all = pd.concat(dfs, ignore_index=True)
+            df_all = pd.concat(dfs, ignore_index=True)
 
-                # Preserve exact input order across multiple files:
-                # first by file upload order, then by original row_id
-                df_all["file_order"] = df_all["source_file"].map({f.name: i for i, f in enumerate(files)})
-                df_all = df_all.sort_values(["file_order", "row_id"], kind="stable").reset_index(drop=True)
+            # Preserve upload order + original row order (stable)
+            file_order_map = {f.name: i for i, f in enumerate(files)}
+            df_all["file_order"] = df_all["source_file"].map(file_order_map)
+            df_all = df_all.sort_values(["file_order", "row_id"], kind="stable").reset_index(drop=True)
 
-                df_all["category"] = ""
-                st.session_state.df_all = df_all
-
-                st.success(f"Loaded {len(df_all)} rows ✅")
-
-                # Quick transparency so you see why lines may be non-OK
-                counts = df_all["row_status"].value_counts(dropna=False).to_dict()
-                st.caption(f"Row status counts: {counts}")
-
-                st.dataframe(df_all.head(30), use_container_width=True)
-            except Exception as e:
-                st.error(f"Error loading files: {e}")
-                return
+            df_all["category"] = ""
+            st.session_state.df_all = df_all
+            st.sidebar.success(f"Loaded {len(df_all)} rows ✅")
 
     df_all = st.session_state.df_all
     if df_all is None:
-        st.info("Upload your file(s) and click **Load & combine data**.")
-        st.markdown(
-            "Expected format:\n\n"
-            "- Column A: Date (e.g. `01/03/2025`)\n"
-            "- Column B: Details (e.g. `CAREEM HALA DUBAI`)\n"
-        )
+        st.info("Upload file(s) and click **Load & combine data**.")
         return
 
+    # Rules editor (fixed category options; prevents mismatch)
     st.subheader("Rules (auto-categorisation)")
     rules_editor = st.data_editor(
         st.session_state.rules_df,
@@ -288,39 +248,38 @@ def main():
         use_container_width=True,
         column_config={
             "keyword": st.column_config.TextColumn("Keyword (contains)"),
-            "category": st.column_config.SelectboxColumn("Category", options=category_list),
+            "category": st.column_config.SelectboxColumn("Category", options=CATEGORIES),
         },
         key="rules_editor",
     )
 
+    # Validate rules before applying (prevents silent “everything became Utilities”)
+    invalid = rules_editor[~rules_editor["category"].isin(CATEGORIES)]
+    if not invalid.empty:
+        st.error("Some rules have invalid categories. Fix them or click **Reset rules to default**.")
+        st.dataframe(invalid, use_container_width=True)
+
     if st.button("⚙️ Apply rules"):
+        # If user somehow introduced invalid category values, block apply
+        if not invalid.empty:
+            st.stop()
+
         st.session_state.rules_df = rules_editor
-        st.session_state.df_all = apply_rules_fill_empty_only(
-            st.session_state.df_all,
-            rules_editor,
-            default_category="Other",
-        )
+        st.session_state.df_all = apply_rules_fill_empty_only(st.session_state.df_all, rules_editor, default_category="Other")
         st.success("Rules applied ✅")
 
     df_all = st.session_state.df_all
 
-    st.subheader("Categorised data (same order as input)")
-    # Keep exact preserved order
-    df_view = df_all.copy()
-    st.dataframe(df_view, use_container_width=True)
+    st.subheader("Categorised data (exact input order)")
+    st.dataframe(df_all, use_container_width=True)
 
     st.subheader("Download")
-    export_bytes = build_exact_export_xlsx(df_view)
+    export_bytes = build_exact_export_xlsx(df_all)
     st.download_button(
-        label="⬇️ Download XLSX (exactly as shown)",
+        "⬇️ Download XLSX (exactly as shown)",
         data=export_bytes,
         file_name="categorised_data.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-
-    st.caption(
-        "Notes: No rows are dropped. Rows with INVALID_DATE / EMPTY_DETAILS are kept and shown as-is; "
-        "categorisation applies only to rows with row_status = OK."
     )
 
 
