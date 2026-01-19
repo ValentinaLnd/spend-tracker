@@ -30,33 +30,41 @@ CATEGORIES = [
 ]
 
 DEFAULT_RULES = [
+   DEFAULT_RULES = [
+    # -------------------
     # Groceries
+    # -------------------
     {"keyword": "SPINNEYS", "category": "Groceries"},
     {"keyword": "CARREFOUR", "category": "Groceries"},
     {"keyword": "GMG CONSUMER", "category": "Groceries"},
     {"keyword": "LULU", "category": "Groceries"},
     {"keyword": "WAITROSE", "category": "Groceries"},
+    {"keyword": "ORGANIC FOODS", "category": "Groceries"},   # FIXED
 
+    # -------------------
     # Restaurants & Cafes
+    # -------------------
     {"keyword": "RESTAURANT", "category": "Restaurants & Cafes"},
-    {"keyword": "EATALY", "category": "Restaurants & Cafes"},
     {"keyword": "CAFE", "category": "Restaurants & Cafes"},
     {"keyword": "CAFÉ", "category": "Restaurants & Cafes"},
-    {"keyword": "BISTRO", "category": "Restaurants & Cafes"},
-    {"keyword": "TRATTORIA", "category": "Restaurants & Cafes"},
-    
-    # Coffee (treat as Restaurants & Cafes)
-    {"keyword": "COFFEE", "category": "Restaurants & Cafes"},
+    {"keyword": "COFFEE", "category": "Restaurants & Cafes"},     # FIXED
     {"keyword": "COFFEE SHOP", "category": "Restaurants & Cafes"},
     {"keyword": "ROASTERS", "category": "Restaurants & Cafes"},
     {"keyword": "ESPRESSO", "category": "Restaurants & Cafes"},
+    {"keyword": "BISTRO", "category": "Restaurants & Cafes"},
+    {"keyword": "TRATTORIA", "category": "Restaurants & Cafes"},
+    {"keyword": "EATALY", "category": "Restaurants & Cafes"},
 
+    # -------------------
     # Food delivery
+    # -------------------
     {"keyword": "DELIVEROO", "category": "Food delivery"},
     {"keyword": "TALABAT", "category": "Food delivery"},
     {"keyword": "ZOMATO", "category": "Food delivery"},
 
+    # -------------------
     # Transport
+    # -------------------
     {"keyword": "CAREEM", "category": "Transport"},
     {"keyword": "UBER", "category": "Transport"},
     {"keyword": "RTA", "category": "Transport"},
@@ -64,17 +72,23 @@ DEFAULT_RULES = [
     {"keyword": "VALTRANS", "category": "Transport"},
     {"keyword": "TAXI", "category": "Transport"},
 
+    # -------------------
     # Parking
+    # -------------------
     {"keyword": "PARKING", "category": "Parking"},
     {"keyword": "PARKONIC", "category": "Parking"},
 
+    # -------------------
     # Shopping
+    # -------------------
     {"keyword": "AMAZON", "category": "Shopping"},
     {"keyword": "NOON", "category": "Shopping"},
     {"keyword": "IKEA", "category": "Shopping"},
     {"keyword": "ACE", "category": "Shopping"},
 
+    # -------------------
     # Beauty
+    # -------------------
     {"keyword": "SEPHORA", "category": "Beauty"},
     {"keyword": "FACES", "category": "Beauty"},
     {"keyword": "TIPS & TOES", "category": "Beauty"},
@@ -83,24 +97,42 @@ DEFAULT_RULES = [
     {"keyword": "KIKO", "category": "Beauty"},
     {"keyword": "MAC", "category": "Beauty"},
 
+    # -------------------
     # Fitness
+    # -------------------
     {"keyword": "FITNESS FIRST", "category": "Fitness"},
     {"keyword": "CLASS PASS", "category": "Fitness"},
     {"keyword": "CLASSPASS", "category": "Fitness"},
     {"keyword": "GYM", "category": "Fitness"},
     {"keyword": "DECATHLON", "category": "Fitness"},
 
+    # -------------------
     # Utilities & Bills
+    # -------------------
     {"keyword": "DEWA", "category": "Utilities & Bills"},
+    {"keyword": "DUBAI ELECTRICITY", "category": "Utilities & Bills"},   # FIXED
+    {"keyword": "URBAN COMPANY", "category": "Utilities & Bills"},       # FIXED
     {"keyword": "ETISALAT", "category": "Utilities & Bills"},
     {"keyword": "DU", "category": "Utilities & Bills"},
 
+    # -------------------
+    # Travel
+    # -------------------
+    {"keyword": "HOTEL", "category": "Travel"},            # FIXED (generic)
+    {"keyword": "MARRIOTT", "category": "Travel"},         # FIXED
+    {"keyword": "WESTIN", "category": "Travel"},           # FIXED
+    {"keyword": "POINTS.COM", "category": "Travel"},       # FIXED
+
+    # -------------------
     # Subscriptions
+    # -------------------
     {"keyword": "NETFLIX", "category": "Subscriptions"},
     {"keyword": "SPOTIFY", "category": "Subscriptions"},
     {"keyword": "AMAZON PRIME", "category": "Subscriptions"},
     {"keyword": "APPLE", "category": "Subscriptions"},
     {"keyword": "GOOGLE", "category": "Subscriptions"},
+]
+
 ]
 
 # ---------------------------
