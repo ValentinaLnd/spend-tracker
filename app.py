@@ -98,70 +98,7 @@ DEFAULT_RULES = [
 
 
 # ---------------------------
-# Helpers
-# ---------------------------
-
-def safe_sheet_name(name: str) -> str:
-    name = re.sub(r'[:\\/?*\[\]]', "-", name)
-    return name[:31]
-
-
-def build_monthly_excel(df: pd.DataFrame) -> bytes:
-    """
-    Excel output:
-      - All
-      - one sheet per month (YYYY-MM)
-    """
-    output = io.BytesIO()
-    df_sorted = df.sort_values(["month", "date"]).copy()
-
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df_sorted.to_excel(writer, index=False, sheet_name="All")
-        for m in sorted(df_sorted["month"].dropna().unique()):
-            sheet = safe_sheet_name(str(m))
-            df_m = df_sorted[df_sorted["month"] == m]
-            df_m.to_excel(writer, index=False, sheet_name=sheet)
-
-    return output.getvalue()
-
-
-def apply_rules_fill_empty_only(
-    df: pd.DataFrame,
-    rules_df: pd.DataFrame,
-    default_category: str = "Other",
-) -> pd.DataFrame:
-    """
-    Keyword-based categorisation.
-    Only fills category where empty.
-    """
-    df = df.copy()
-
-    if "category" not in df.columns:
-        df["category"] = ""
-
-    desc = df["details"].fillna("").astype(str).str.upper()
-    cats = df["category"].fillna("").astype(str)
-
-    empty_mask = cats.str.strip() == ""
-    result = cats.copy()
-
-    # Default only for empty rows
-    result.loc[empty_mask] = default_category
-
-    for _, row in rules_df.iterrows():
-        kw = str(row.get("keyword", "")).strip().upper()
-        cat = str(row.get("category", "")).strip()
-        if not kw or not cat:
-            continue
-        hit = desc.str.contains(re.escape(kw), na=False)
-        result.loc[empty_mask & hit] = cat
-
-    df["category"] = result
-    return df
-
-
-# ---------------------------
-# Input loader: 2 columns (Date + Details)
+# Input loader: 2 columns (Date + Details) — KEEP ALL ROWS
 # ---------------------------
 
 def read_two_col_export(file) -> pd.DataFrame:
@@ -169,7 +106,12 @@ def read_two_col_export(file) -> pd.DataFrame:
     Supports XLSX/CSV with:
       - Column A: Date
       - Column B: Details
-    Headers are optional.
+    Headers optional.
+
+    IMPORTANT:
+      - Does NOT drop rows.
+      - Adds row_id to preserve original order.
+      - Adds row_status to explain non-transaction rows.
     """
     name = file.name.lower()
 
@@ -186,27 +128,86 @@ def read_two_col_export(file) -> pd.DataFrame:
     col0 = raw.iloc[:, 0]
     col1 = raw.iloc[:, 1]
 
-    # Detect header row
-    first0 = str(col0.iloc[0]).strip().lower()
-    first1 = str(col1.iloc[0]).strip().lower()
+    # Detect a header row like: "Date" | "Details"
+    first0 = str(col0.iloc[0]).strip().lower() if len(col0) else ""
+    first1 = str(col1.iloc[0]).strip().lower() if len(col1) else ""
     has_header = ("date" in first0) and ("detail" in first1 or "description" in first1)
 
     if has_header:
-        col0 = col0.iloc[1:]
-        col1 = col1.iloc[1:]
+        col0 = col0.iloc[1:].reset_index(drop=True)
+        col1 = col1.iloc[1:].reset_index(drop=True)
+    else:
+        col0 = col0.reset_index(drop=True)
+        col1 = col1.reset_index(drop=True)
 
     df = pd.DataFrame(
         {
-            "date": pd.to_datetime(col0, errors="coerce", dayfirst=True),
-            "details": col1.astype(str).str.strip(),
+            "row_id": range(len(col0)),       # preserves original order
+            "date_raw": col0,                 # keep original value for debugging
+            "details": col1.astype(str).fillna("").str.strip(),
         }
     )
 
-    df = df.dropna(subset=["date"]).copy()
-    df = df[df["details"].str.strip() != ""].copy()
+    # Parse date (but do NOT drop rows)
+    df["date"] = pd.to_datetime(df["date_raw"], errors="coerce", dayfirst=True)
+
+    # Flag row issues
+    df["row_status"] = "OK"
+    df.loc[df["date"].isna(), "row_status"] = "INVALID_DATE"
+    df.loc[df["details"].str.strip().eq(""), "row_status"] = "EMPTY_DETAILS"
+
+    # Optional month (blank if invalid date)
     df["month"] = df["date"].dt.to_period("M").astype(str)
 
     return df
+
+
+# ---------------------------
+# Categorisation (keyword contains, fill empty only, ONLY for OK rows)
+# ---------------------------
+
+def apply_rules_fill_empty_only(
+    df: pd.DataFrame,
+    rules_df: pd.DataFrame,
+    default_category: str = "Other",
+) -> pd.DataFrame:
+    df = df.copy()
+
+    if "category" not in df.columns:
+        df["category"] = ""
+
+    ok_mask = df.get("row_status", "OK").eq("OK")
+
+    desc = df["details"].fillna("").astype(str).str.upper()
+    cats = df["category"].fillna("").astype(str)
+
+    empty_mask = cats.str.strip() == ""
+    target_mask = ok_mask & empty_mask
+
+    result = cats.copy()
+    result.loc[target_mask] = default_category
+
+    for _, row in rules_df.iterrows():
+        kw = str(row.get("keyword", "")).strip().upper()
+        cat = str(row.get("category", "")).strip()
+        if not kw or not cat:
+            continue
+        hit = desc.str.contains(re.escape(kw), na=False)
+        result.loc[target_mask & hit] = cat
+
+    df["category"] = result
+    return df
+
+
+# ---------------------------
+# Export: download exactly what is shown (same order)
+# ---------------------------
+
+def build_exact_export_xlsx(df: pd.DataFrame) -> bytes:
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Categorised data")
+    return buf.getvalue()
 
 
 # ---------------------------
@@ -217,7 +218,7 @@ def main():
     st.title("💳 Spend Tracker — Categorise Expenses")
 
     st.sidebar.header("1) Upload your file(s)")
-    st.sidebar.write("Upload XLSX or CSV with **2 columns**: **Date** + **Details**.")
+    st.sidebar.write("Upload XLSX or CSV with **2 columns**: **Date** + **Details** (headers optional).")
 
     files = st.sidebar.file_uploader(
         "Upload files",
@@ -243,12 +244,28 @@ def main():
             st.warning("Upload at least one file.")
         else:
             try:
-                dfs = [read_two_col_export(f) for f in files]
-                df_all = pd.concat(dfs, ignore_index=True).sort_values("date")
+                dfs = []
+                for f in files:
+                    df_part = read_two_col_export(f)
+                    df_part["source_file"] = f.name  # helps trace issues
+                    dfs.append(df_part)
+
+                df_all = pd.concat(dfs, ignore_index=True)
+
+                # Preserve exact input order across multiple files:
+                # first by file upload order, then by original row_id
+                df_all["file_order"] = df_all["source_file"].map({f.name: i for i, f in enumerate(files)})
+                df_all = df_all.sort_values(["file_order", "row_id"], kind="stable").reset_index(drop=True)
+
                 df_all["category"] = ""
                 st.session_state.df_all = df_all
 
                 st.success(f"Loaded {len(df_all)} rows ✅")
+
+                # Quick transparency so you see why lines may be non-OK
+                counts = df_all["row_status"].value_counts(dropna=False).to_dict()
+                st.caption(f"Row status counts: {counts}")
+
                 st.dataframe(df_all.head(30), use_container_width=True)
             except Exception as e:
                 st.error(f"Error loading files: {e}")
@@ -271,10 +288,7 @@ def main():
         use_container_width=True,
         column_config={
             "keyword": st.column_config.TextColumn("Keyword (contains)"),
-            "category": st.column_config.SelectboxColumn(
-                "Category",
-                options=category_list,
-            ),
+            "category": st.column_config.SelectboxColumn("Category", options=category_list),
         },
         key="rules_editor",
     )
@@ -290,18 +304,24 @@ def main():
 
     df_all = st.session_state.df_all
 
-    st.subheader("Categorised data")
-    st.dataframe(df_all.sort_values("date"), use_container_width=True)
+    st.subheader("Categorised data (same order as input)")
+    # Keep exact preserved order
+    df_view = df_all.copy()
+    st.dataframe(df_view, use_container_width=True)
 
-    st.subheader("Export to Google Sheets")
-    xlsx_bytes = build_monthly_excel(df_all)
+    st.subheader("Download")
+    export_bytes = build_exact_export_xlsx(df_view)
     st.download_button(
-        label="⬇️ Download Excel (tabs per month)",
-        data=xlsx_bytes,
-        file_name="spend_tracker_monthly_tabs.xlsx",
+        label="⬇️ Download XLSX (exactly as shown)",
+        data=export_bytes,
+        file_name="categorised_data.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-    st.caption("Upload to Google Drive → Open with Google Sheets.")
+
+    st.caption(
+        "Notes: No rows are dropped. Rows with INVALID_DATE / EMPTY_DETAILS are kept and shown as-is; "
+        "categorisation applies only to rows with row_status = OK."
+    )
 
 
 if __name__ == "__main__":
