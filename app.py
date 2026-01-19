@@ -132,8 +132,6 @@ DEFAULT_RULES = [
     {"keyword": "GOOGLE", "category": "Subscriptions"},
 ]
 
-]
-
 # ---------------------------
 # Input loader: 2 columns (Date + Details) — keep ALL rows + preserve order
 # ---------------------------
