@@ -6,9 +6,8 @@ import streamlit as st
 
 st.set_page_config(page_title="Spend Tracker — Categorise", layout="wide")
 
-
 # ---------------------------
-# Fixed approved categories + default rules (stable)
+# Fixed approved categories + default rules
 # ---------------------------
 
 CATEGORIES = [
@@ -87,7 +86,6 @@ DEFAULT_RULES = [
 
     # Utilities & Bills
     {"keyword": "DEWA", "category": "Utilities & Bills"},
-    {"keyword": "DUBAI ELECTRICITY", "category": "Utilities & Bills"},
     {"keyword": "ETISALAT", "category": "Utilities & Bills"},
     {"keyword": "DU", "category": "Utilities & Bills"},
 
@@ -98,7 +96,6 @@ DEFAULT_RULES = [
     {"keyword": "APPLE", "category": "Subscriptions"},
     {"keyword": "GOOGLE", "category": "Subscriptions"},
 ]
-
 
 # ---------------------------
 # Input loader: 2 columns (Date + Details) — keep ALL rows + preserve order
@@ -149,9 +146,23 @@ def read_two_col_export(file) -> pd.DataFrame:
     df["month"] = df["date"].dt.to_period("M").astype(str)
     return df
 
+# ---------------------------
+# Matching fix: short keywords must match as whole words (DU != DUBAI)
+# ---------------------------
+
+def keyword_to_regex(kw: str) -> str:
+    """
+    - For short alphanumeric keywords (<=3), match as a whole token.
+      e.g. DU should match ' DU ' but NOT 'DUBAI'.
+    - Otherwise, keep safe substring match.
+    """
+    kw = kw.strip().upper()
+    if re.fullmatch(r"[A-Z0-9]{1,3}", kw):
+        return rf"(?<![A-Z0-9]){re.escape(kw)}(?![A-Z0-9])"
+    return re.escape(kw)
 
 # ---------------------------
-# Categorisation: keyword contains, fill empty only, OK rows only
+# Categorisation: keyword contains (but smarter), fill empty only, OK rows only
 # ---------------------------
 
 def apply_rules_fill_empty_only(df: pd.DataFrame, rules_df: pd.DataFrame, default_category: str = "Other") -> pd.DataFrame:
@@ -175,19 +186,19 @@ def apply_rules_fill_empty_only(df: pd.DataFrame, rules_df: pd.DataFrame, defaul
         cat = str(row.get("category", "")).strip()
         if not kw or not cat:
             continue
-        hit = desc.str.contains(re.escape(kw), na=False)
+
+        pattern = keyword_to_regex(kw)
+        hit = desc.str.contains(pattern, na=False, regex=True)
         result.loc[target & hit] = cat
 
     df["category"] = result
     return df
-
 
 def build_exact_export_xlsx(df: pd.DataFrame) -> bytes:
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Categorised data")
     return buf.getvalue()
-
 
 # ---------------------------
 # App
@@ -196,7 +207,6 @@ def build_exact_export_xlsx(df: pd.DataFrame) -> bytes:
 def main():
     st.title("💳 Spend Tracker — Categorise Expenses")
 
-    # Session state
     if "rules_df" not in st.session_state:
         st.session_state.rules_df = pd.DataFrame(DEFAULT_RULES)
     if "df_all" not in st.session_state:
@@ -240,7 +250,6 @@ def main():
         st.info("Upload file(s) and click **Load & combine data**.")
         return
 
-    # Rules editor (fixed category options; prevents mismatch)
     st.subheader("Rules (auto-categorisation)")
     rules_editor = st.data_editor(
         st.session_state.rules_df,
@@ -253,19 +262,18 @@ def main():
         key="rules_editor",
     )
 
-    # Validate rules before applying (prevents silent “everything became Utilities”)
     invalid = rules_editor[~rules_editor["category"].isin(CATEGORIES)]
     if not invalid.empty:
         st.error("Some rules have invalid categories. Fix them or click **Reset rules to default**.")
         st.dataframe(invalid, use_container_width=True)
 
     if st.button("⚙️ Apply rules"):
-        # If user somehow introduced invalid category values, block apply
         if not invalid.empty:
             st.stop()
-
         st.session_state.rules_df = rules_editor
-        st.session_state.df_all = apply_rules_fill_empty_only(st.session_state.df_all, rules_editor, default_category="Other")
+        st.session_state.df_all = apply_rules_fill_empty_only(
+            st.session_state.df_all, rules_editor, default_category="Other"
+        )
         st.success("Rules applied ✅")
 
     df_all = st.session_state.df_all
@@ -282,6 +290,7 @@ def main():
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
+    st.caption("Key fix: short keywords like 'DU' now match whole words (so 'DU' no longer matches 'DUBAI').")
 
 if __name__ == "__main__":
     main()
