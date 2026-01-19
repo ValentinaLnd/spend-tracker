@@ -44,6 +44,12 @@ DEFAULT_RULES = [
     {"keyword": "CAFÉ", "category": "Restaurants & Cafes"},
     {"keyword": "BISTRO", "category": "Restaurants & Cafes"},
     {"keyword": "TRATTORIA", "category": "Restaurants & Cafes"},
+    
+    # Coffee (treat as Restaurants & Cafes)
+    {"keyword": "COFFEE", "category": "Restaurants & Cafes"},
+    {"keyword": "COFFEE SHOP", "category": "Restaurants & Cafes"},
+    {"keyword": "ROASTERS", "category": "Restaurants & Cafes"},
+    {"keyword": "ESPRESSO", "category": "Restaurants & Cafes"},
 
     # Food delivery
     {"keyword": "DELIVEROO", "category": "Food delivery"},
