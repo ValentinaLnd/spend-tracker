@@ -30,7 +30,6 @@ CATEGORIES = [
 ]
 
 DEFAULT_RULES = [
-   DEFAULT_RULES = [
     # -------------------
     # Groceries
     # -------------------
