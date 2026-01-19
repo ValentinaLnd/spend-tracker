@@ -11,7 +11,7 @@ DATA_PATH = Path("data")
 DATA_PATH.mkdir(exist_ok=True)
 
 # ---------------------------
-# Categories + rules (unchanged logic)
+# Categories + rules (same logic: keyword contains)
 # ---------------------------
 
 DEFAULT_CATEGORIES = [
@@ -58,10 +58,11 @@ DEFAULT_RULES = [
     {"keyword": "CAREEM", "category": "Transport"},
     {"keyword": "UBER", "category": "Transport"},
     {"keyword": "RTA", "category": "Transport"},
+    {"keyword": "SALIK", "category": "Transport"},
     {"keyword": "VALTRANS", "category": "Transport"},
     {"keyword": "TAXI", "category": "Transport"},
 
-    # Parking (explicit)
+    # Parking
     {"keyword": "PARKING", "category": "Parking"},
 
     # Shopping
@@ -100,7 +101,9 @@ DEFAULT_RULES = [
 
 
 # ---------------------------
-# Parsing helpers for your NEW input format
+# Parsing helpers for NEW input: single column with raw transaction lines
+# Example line:
+# 01/03/2025 02/03/2025 VALTRANS TRANSPORTATIO DUBAI ARE 60.00
 # ---------------------------
 
 RAW_LINE_REGEX = re.compile(
@@ -113,17 +116,13 @@ RAW_LINE_REGEX = re.compile(
 
 def parse_amount_to_float(x: str) -> float | None:
     """
-    Handles amounts like: 60.00, 1,040.00, 53,00
+    Handles: 60.00, 1,040.00, 53,00
     """
-    s = str(x).strip()
-    # remove spaces
-    s = s.replace(" ", "")
-    # if comma is used as thousands separator and dot as decimal (1,040.00), remove commas
-    # if comma is decimal separator (53,00), convert to dot
+    s = str(x).strip().replace(" ", "")
     if "," in s and "." in s:
-        s = s.replace(",", "")
+        s = s.replace(",", "")       # 1,040.00 -> 1040.00
     elif "," in s and "." not in s:
-        s = s.replace(",", ".")
+        s = s.replace(",", ".")      # 53,00 -> 53.00
     s = re.sub(r"[^0-9\.\-]", "", s)
     try:
         return float(s)
@@ -132,15 +131,13 @@ def parse_amount_to_float(x: str) -> float | None:
 
 def read_single_column_export(file) -> pd.DataFrame:
     """
-    Reads your single-column XLSX/CSV where each row is a raw transaction line like:
-    01/03/2025 02/03/2025 VALTRANS TRANSPORTATIO DUBAI ARE 60.00
+    Reads single-column XLSX/CSV where each row is a raw transaction line.
+    IMPORTANT: header=None so first transaction isn't treated as header.
     """
     name = file.name.lower()
 
     if name.endswith(".xlsx") or name.endswith(".xls"):
-        # IMPORTANT: header=None to avoid treating first transaction as header
         df = pd.read_excel(file, engine="openpyxl", header=None)
-        # take first column only
         raw_series = df.iloc[:, 0]
     elif name.endswith(".csv"):
         df = pd.read_csv(file, header=None)
@@ -155,15 +152,9 @@ def read_single_column_export(file) -> pd.DataFrame:
     for line in raw_series.tolist():
         m = RAW_LINE_REGEX.match(line)
         if not m:
-            # Skip lines that do not match (or keep them as errors)
+            # Keep the raw line as a non-parsed row marker (won't appear in analytics)
             rows.append(
-                {
-                    "raw": line,
-                    "date": pd.NaT,
-                    "details": line,
-                    "currency": None,
-                    "amount": None,
-                }
+                {"raw": line, "date": pd.NaT, "details": line, "currency": None, "amount": None}
             )
             continue
 
@@ -174,26 +165,24 @@ def read_single_column_export(file) -> pd.DataFrame:
                 "date": pd.to_datetime(m.group("date1"), format="%d/%m/%Y", errors="coerce"),
                 "details": m.group("details").strip(),
                 "currency": m.group("currency").strip(),
-                # your file = expenses only => spend => negative
+                # Expenses-only file => store as negative
                 "amount": -abs(amt) if amt is not None else None,
             }
         )
 
     out = pd.DataFrame(rows)
-    # Drop truly unusable rows
     out = out.dropna(subset=["date", "amount"]).copy()
     out["month"] = out["date"].dt.to_period("M").astype(str)
     out["year"] = out["date"].dt.year
     return out
 
-def apply_rules_fill_empty_only(df: pd.DataFrame, rules_df: pd.DataFrame, default_category: str = "Other") -> pd.DataFrame:
-    """
-    Rule logic is the same (keyword contains), but we:
-    - create Categories if missing
-    - only fill Categories where empty
-    """
-    df = df.copy()
 
+# ---------------------------
+# Categorisation (same keyword logic; fill empty only)
+# ---------------------------
+
+def apply_rules_fill_empty_only(df: pd.DataFrame, rules_df: pd.DataFrame, default_category: str = "Other") -> pd.DataFrame:
+    df = df.copy()
     if "Categories" not in df.columns:
         df["Categories"] = ""
 
@@ -203,7 +192,7 @@ def apply_rules_fill_empty_only(df: pd.DataFrame, rules_df: pd.DataFrame, defaul
     empty_mask = cats.str.strip() == ""
     result = cats.copy()
 
-    # default for empty
+    # default for empties
     result.loc[empty_mask] = default_category
 
     for _, row in rules_df.iterrows():
@@ -212,7 +201,6 @@ def apply_rules_fill_empty_only(df: pd.DataFrame, rules_df: pd.DataFrame, defaul
         if not kw or not cat:
             continue
         hit = desc.str.contains(re.escape(kw), na=False)
-        # only update rows that were empty originally (still allowed to overwrite default "Other")
         result.loc[empty_mask & hit] = cat
 
     df["Categories"] = result
@@ -272,20 +260,23 @@ def main():
     if "df_all" not in st.session_state:
         st.session_state.df_all = None
 
-    if st.button("Load data", type="primary"):
-        if upload is None:
-            st.warning("Please upload your XLSX/CSV file first.")
-        else:
-            try:
-                df_all = read_single_column_export(upload)
-                df_all["Categories"] = ""  # start empty, then fill with rules
-                st.session_state.df_all = df_all
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        if st.button("Load data", type="primary"):
+            if upload is None:
+                st.warning("Please upload your XLSX/CSV file first.")
+            else:
+                try:
+                    df_all = read_single_column_export(upload)
+                    # Start empty categories; user applies rules
+                    df_all["Categories"] = ""
+                    st.session_state.df_all = df_all
 
-                st.success(f"Loaded {len(df_all)} transactions ✅")
-                st.dataframe(df_all.head(25), use_container_width=True)
-            except Exception as e:
-                st.error(f"Error loading file: {e}")
-                return
+                    st.success(f"Loaded {len(df_all)} transactions ✅")
+                    st.dataframe(df_all.head(25), use_container_width=True)
+                except Exception as e:
+                    st.error(f"Error loading file: {e}")
+                    return
 
     df_all = st.session_state.df_all
     if df_all is None:
@@ -308,17 +299,31 @@ def main():
         key="rules_editor",
     )
 
-    if st.button("⚙️ Apply rules and categorize"):
-        st.session_state.rules_df = rules_editor
-        st.session_state.df_all = apply_rules_fill_empty_only(
-            st.session_state.df_all, rules_editor, default_category="Other"
-        )
-        st.success("Rules applied ✅")
+    colA, colB = st.columns([1, 2])
+    with colA:
+        if st.button("⚙️ Apply rules and categorize"):
+            st.session_state.rules_df = rules_editor
+            st.session_state.df_all = apply_rules_fill_empty_only(
+                st.session_state.df_all, rules_editor, default_category="Other"
+            )
+            st.success("Rules applied ✅")
 
     df_all = st.session_state.df_all
 
     st.subheader("Step 2 – Trends")
-    spend = df_all[df_all["amount"] < 0].copy()
+
+    # --- chart-safe categories to prevent Altair schema ValueError ---
+    df_all_for_charts = df_all.copy()
+    df_all_for_charts["Categories"] = (
+        df_all_for_charts.get("Categories", "")
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .replace("", "Other")
+    )
+    df_all_for_charts["Categories"] = df_all_for_charts["Categories"].str.replace(r"\s+", " ", regex=True)
+
+    spend = df_all_for_charts[df_all_for_charts["amount"] < 0].copy()
     spend["spend"] = spend["amount"].abs()
 
     if spend.empty:
@@ -330,13 +335,27 @@ def main():
             .pivot(index="month", columns="Categories", values="spend")
             .fillna(0)
         )
+
+        # Make column names safe + unique for Altair
+        monthly.columns = [str(c).strip() if str(c).strip() else "Other" for c in monthly.columns]
+        seen = {}
+        new_cols = []
+        for c in monthly.columns:
+            if c not in seen:
+                seen[c] = 0
+                new_cols.append(c)
+            else:
+                seen[c] += 1
+                new_cols.append(f"{c} ({seen[c]})")
+        monthly.columns = new_cols
+
         st.line_chart(monthly)
 
         top_cat = spend.groupby("Categories", as_index=False)["spend"].sum().sort_values("spend", ascending=False)
         st.bar_chart(top_cat.set_index("Categories"))
 
     st.subheader("Export to Google Sheets (tabs per month)")
-    xlsx_bytes = build_monthly_excel(df_all)
+    xlsx_bytes = build_monthly_excel(df_all_for_charts)
     st.download_button(
         label="⬇️ Download Excel (one tab per month)",
         data=xlsx_bytes,
