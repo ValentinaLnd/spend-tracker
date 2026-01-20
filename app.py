@@ -7,7 +7,7 @@ import streamlit as st
 st.set_page_config(page_title="Spend Tracker — Categorise", layout="wide")
 
 # ---------------------------
-# Fixed categories (approved taxonomy)
+# Approved taxonomy (includes Pharmacy)
 # ---------------------------
 
 CATEGORIES = [
@@ -31,9 +31,7 @@ CATEGORIES = [
 ]
 
 # ---------------------------
-# Default rules (refined)
-# NOTE: order matters only when multiple keywords match the same row.
-# The engine fills empty only, so each row gets one category.
+# Default rules (refined with your lists)
 # ---------------------------
 
 DEFAULT_RULES = [
@@ -59,15 +57,28 @@ DEFAULT_RULES = [
     {"keyword": "COFFEE SHOP", "category": "Restaurants & Cafes"},
     {"keyword": "ROASTERS", "category": "Restaurants & Cafes"},
     {"keyword": "ESPRESSO", "category": "Restaurants & Cafes"},
-    {"keyword": "EATALY", "category": "Restaurants & Cafes"},
     {"keyword": "BISTRO", "category": "Restaurants & Cafes"},
     {"keyword": "TRATTORIA", "category": "Restaurants & Cafes"},
-    # merchant boosters from your examples
+    {"keyword": "EATALY", "category": "Restaurants & Cafes"},
+
+    # Merchant boosters you asked for
     {"keyword": "BARISTA", "category": "Restaurants & Cafes"},
     {"keyword": "ANGEL PARK REST", "category": "Restaurants & Cafes"},
     {"keyword": "DIN TAI FUNG", "category": "Restaurants & Cafes"},
     {"keyword": "LDCKITCHEN", "category": "Restaurants & Cafes"},
     {"keyword": "IBRIC COFFE", "category": "Restaurants & Cafes"},
+
+    # New list (restaurants)
+    {"keyword": "SUFRET MARYAM", "category": "Restaurants & Cafes"},
+    {"keyword": "ONE AND ONLY", "category": "Restaurants & Cafes"},
+    {"keyword": "KAI BEACH", "category": "Restaurants & Cafes"},
+    {"keyword": "REIF KUSHIYAKI", "category": "Restaurants & Cafes"},
+    {"keyword": "COMPTOIR 102", "category": "Restaurants & Cafes"},
+    {"keyword": "LA FABBRICA ITALIANA", "category": "Restaurants & Cafes"},
+    {"keyword": "BDC HOSPITALITY", "category": "Restaurants & Cafes"},
+    {"keyword": "MYTHOS KOUZINA", "category": "Restaurants & Cafes"},
+    {"keyword": "KYOCHON", "category": "Restaurants & Cafes"},
+    {"keyword": "THE MAINE", "category": "Restaurants & Cafes"},  # fixes THE MAINE STREET EATER
 
     # -------------------
     # Food delivery
@@ -86,12 +97,15 @@ DEFAULT_RULES = [
     {"keyword": "SALIK", "category": "Transport"},
     {"keyword": "VALTRANS", "category": "Transport"},
     {"keyword": "TAXI", "category": "Transport"},
+    # EPPCO ambiguity in your examples -> handle by site-specific rules
+    {"keyword": "EPPCO SITE 1060", "category": "Transport"},
 
     # -------------------
     # Parking
     # -------------------
     {"keyword": "PARKING", "category": "Parking"},
     {"keyword": "PARKONIC", "category": "Parking"},
+    {"keyword": "ANE PARK", "category": "Parking"},  # covers ANE PARK POINT (if it's parking)
 
     # -------------------
     # Shopping
@@ -102,6 +116,18 @@ DEFAULT_RULES = [
     {"keyword": "ACE", "category": "Shopping"},
     {"keyword": "FLYING TIGER", "category": "Shopping"},
     {"keyword": "LIFESTYLE CHOICE", "category": "Shopping"},
+    {"keyword": "SUN AND SAND SPORTS", "category": "Shopping"},
+    {"keyword": "OKA CERAMICS", "category": "Shopping"},
+    {"keyword": "OUNASS", "category": "Shopping"},
+    {"keyword": "OYSHO", "category": "Shopping"},
+    {"keyword": "POTTERY BARN", "category": "Shopping"},
+    {"keyword": "THEOUTNET", "category": "Shopping"},
+    {"keyword": "AL FUTTAIM TRD CO", "category": "Shopping"},
+    {"keyword": "VISIQUE OPTICAL", "category": "Shopping"},
+    {"keyword": "STITCH IN TIME", "category": "Shopping"},
+    {"keyword": "ONTHELIST", "category": "Shopping"},
+    {"keyword": "SWATCH", "category": "Shopping"},
+    {"keyword": "JACADI", "category": "Shopping"},  # you had it as Other before; setting as Shopping is more consistent
 
     # -------------------
     # Beauty
@@ -113,6 +139,7 @@ DEFAULT_RULES = [
     {"keyword": "THE BODY SHOP", "category": "Beauty"},
     {"keyword": "KIKO", "category": "Beauty"},
     {"keyword": "MAC", "category": "Beauty"},
+    {"keyword": "BENEFIT BOUTIQUE", "category": "Beauty"},
 
     # -------------------
     # Fitness
@@ -134,12 +161,16 @@ DEFAULT_RULES = [
     {"keyword": "ADNOC", "category": "Utilities & Bills"},
     {"keyword": "LOOTAH BC GAS", "category": "Utilities & Bills"},
     {"keyword": "ETISALAT", "category": "Utilities & Bills"},
-    {"keyword": "DU", "category": "Utilities & Bills"},  # IMPORTANT: handled safely (won't match DUBAI)
+    {"keyword": "DU", "category": "Utilities & Bills"},  # safe-matched as a whole token, not inside DUBAI
+    {"keyword": "SMART DUBAI", "category": "Utilities & Bills"},
+    {"keyword": "ABU DHABI POLICE", "category": "Utilities & Bills"},
+    {"keyword": "EPPCO SITE 1076", "category": "Utilities & Bills"},  # your example
+    {"keyword": "DSC COMMERCIAL", "category": "Utilities & Bills"},  # building fees often fall here
 
     # -------------------
     # Travel
     # -------------------
-    {"keyword": "HOTEL", "category": "Travel"},       # anything with HOTEL => Travel
+    {"keyword": "HOTEL", "category": "Travel"},  # anything with HOTEL => Travel
     {"keyword": "MARRIOTT", "category": "Travel"},
     {"keyword": "WESTIN", "category": "Travel"},
     {"keyword": "POINTS.COM", "category": "Travel"},
@@ -196,8 +227,8 @@ def read_two_col_export(file) -> pd.DataFrame:
 
     df = pd.DataFrame(
         {
-            "row_id": range(len(col0)),       # preserves original order within file
-            "date_raw": col0,                 # keep original
+            "row_id": range(len(col0)),  # preserves original order within file
+            "date_raw": col0,
             "details": col1.astype(str).fillna("").str.strip(),
         }
     )
@@ -221,9 +252,9 @@ def read_two_col_export(file) -> pd.DataFrame:
 
 def keyword_to_regex(kw: str) -> str:
     """
-    - If keyword is short (1-3 chars alphanumeric), match as a whole token.
-      Example: DU matches ' DU ' but NOT 'DUBAI'.
-    - Otherwise, simple escaped substring match.
+    If keyword is short (1-3 chars alphanumeric), match as a whole token.
+    Example: DU matches ' DU ' but NOT 'DUBAI'.
+    Otherwise, safe substring match.
     """
     kw = kw.strip().upper()
     if re.fullmatch(r"[A-Z0-9]{1,3}", kw):
@@ -371,8 +402,8 @@ def main():
     )
 
     st.caption(
-        "Notes: No rows are dropped. Rows flagged INVALID_DATE / EMPTY_DETAILS are kept. "
-        "Categorisation is applied only to rows with row_status = OK. "
+        "No rows are dropped. Rows flagged INVALID_DATE / EMPTY_DETAILS are kept. "
+        "Categorisation applies only to rows with row_status = OK. "
         "Short keywords like 'DU' match whole tokens, so they won't match 'DUBAI'."
     )
 
