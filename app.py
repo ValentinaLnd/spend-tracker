@@ -7,7 +7,7 @@ import streamlit as st
 st.set_page_config(page_title="Spend Tracker — Categorise", layout="wide")
 
 # ---------------------------
-# Fixed approved categories + default rules
+# Fixed categories (approved taxonomy)
 # ---------------------------
 
 CATEGORIES = [
@@ -23,11 +23,18 @@ CATEGORIES = [
     "Utilities & Bills",
     "Subscriptions",
     "Healthcare",
+    "Pharmacy",
     "Travel",
     "Income",
     "Savings / Investments",
     "Other",
 ]
+
+# ---------------------------
+# Default rules (refined)
+# NOTE: order matters only when multiple keywords match the same row.
+# The engine fills empty only, so each row gets one category.
+# ---------------------------
 
 DEFAULT_RULES = [
     # -------------------
@@ -38,7 +45,9 @@ DEFAULT_RULES = [
     {"keyword": "GMG CONSUMER", "category": "Groceries"},
     {"keyword": "LULU", "category": "Groceries"},
     {"keyword": "WAITROSE", "category": "Groceries"},
-    {"keyword": "ORGANIC FOODS", "category": "Groceries"},   # FIXED
+    {"keyword": "ORGANIC FOODS", "category": "Groceries"},
+    {"keyword": "CCA AL ACCAD", "category": "Groceries"},
+    {"keyword": "DEPARTMEN", "category": "Groceries"},  # catches DEPARTMENT/DEPARTMEN variants
 
     # -------------------
     # Restaurants & Cafes
@@ -46,13 +55,19 @@ DEFAULT_RULES = [
     {"keyword": "RESTAURANT", "category": "Restaurants & Cafes"},
     {"keyword": "CAFE", "category": "Restaurants & Cafes"},
     {"keyword": "CAFÉ", "category": "Restaurants & Cafes"},
-    {"keyword": "COFFEE", "category": "Restaurants & Cafes"},     # FIXED
+    {"keyword": "COFFEE", "category": "Restaurants & Cafes"},
     {"keyword": "COFFEE SHOP", "category": "Restaurants & Cafes"},
     {"keyword": "ROASTERS", "category": "Restaurants & Cafes"},
     {"keyword": "ESPRESSO", "category": "Restaurants & Cafes"},
+    {"keyword": "EATALY", "category": "Restaurants & Cafes"},
     {"keyword": "BISTRO", "category": "Restaurants & Cafes"},
     {"keyword": "TRATTORIA", "category": "Restaurants & Cafes"},
-    {"keyword": "EATALY", "category": "Restaurants & Cafes"},
+    # merchant boosters from your examples
+    {"keyword": "BARISTA", "category": "Restaurants & Cafes"},
+    {"keyword": "ANGEL PARK REST", "category": "Restaurants & Cafes"},
+    {"keyword": "DIN TAI FUNG", "category": "Restaurants & Cafes"},
+    {"keyword": "LDCKITCHEN", "category": "Restaurants & Cafes"},
+    {"keyword": "IBRIC COFFE", "category": "Restaurants & Cafes"},
 
     # -------------------
     # Food delivery
@@ -60,6 +75,7 @@ DEFAULT_RULES = [
     {"keyword": "DELIVEROO", "category": "Food delivery"},
     {"keyword": "TALABAT", "category": "Food delivery"},
     {"keyword": "ZOMATO", "category": "Food delivery"},
+    {"keyword": "CASINETTO", "category": "Food delivery"},
 
     # -------------------
     # Transport
@@ -84,6 +100,8 @@ DEFAULT_RULES = [
     {"keyword": "NOON", "category": "Shopping"},
     {"keyword": "IKEA", "category": "Shopping"},
     {"keyword": "ACE", "category": "Shopping"},
+    {"keyword": "FLYING TIGER", "category": "Shopping"},
+    {"keyword": "LIFESTYLE CHOICE", "category": "Shopping"},
 
     # -------------------
     # Beauty
@@ -109,18 +127,30 @@ DEFAULT_RULES = [
     # Utilities & Bills
     # -------------------
     {"keyword": "DEWA", "category": "Utilities & Bills"},
-    {"keyword": "DUBAI ELECTRICITY", "category": "Utilities & Bills"},   # FIXED
-    {"keyword": "URBAN COMPANY", "category": "Utilities & Bills"},       # FIXED
+    {"keyword": "DUBAI ELECTRICITY", "category": "Utilities & Bills"},
+    {"keyword": "URBAN COMPANY", "category": "Utilities & Bills"},
+    {"keyword": "NESTLE WATERS", "category": "Utilities & Bills"},
+    {"keyword": "ENOC", "category": "Utilities & Bills"},
+    {"keyword": "ADNOC", "category": "Utilities & Bills"},
+    {"keyword": "LOOTAH BC GAS", "category": "Utilities & Bills"},
     {"keyword": "ETISALAT", "category": "Utilities & Bills"},
-    {"keyword": "DU", "category": "Utilities & Bills"},
+    {"keyword": "DU", "category": "Utilities & Bills"},  # IMPORTANT: handled safely (won't match DUBAI)
 
     # -------------------
     # Travel
     # -------------------
-    {"keyword": "HOTEL", "category": "Travel"},            # FIXED (generic)
-    {"keyword": "MARRIOTT", "category": "Travel"},         # FIXED
-    {"keyword": "WESTIN", "category": "Travel"},           # FIXED
-    {"keyword": "POINTS.COM", "category": "Travel"},       # FIXED
+    {"keyword": "HOTEL", "category": "Travel"},       # anything with HOTEL => Travel
+    {"keyword": "MARRIOTT", "category": "Travel"},
+    {"keyword": "WESTIN", "category": "Travel"},
+    {"keyword": "POINTS.COM", "category": "Travel"},
+    {"keyword": "EMIRATES", "category": "Travel"},
+    {"keyword": "AIRALO", "category": "Travel"},
+
+    # -------------------
+    # Pharmacy
+    # -------------------
+    {"keyword": "ACACIA COMMUNITY", "category": "Pharmacy"},
+    {"keyword": "PHARM", "category": "Pharmacy"},  # catches PHAR / PHARMACY
 
     # -------------------
     # Subscriptions
@@ -166,30 +196,34 @@ def read_two_col_export(file) -> pd.DataFrame:
 
     df = pd.DataFrame(
         {
-            "row_id": range(len(col0)),
-            "date_raw": col0,
+            "row_id": range(len(col0)),       # preserves original order within file
+            "date_raw": col0,                 # keep original
             "details": col1.astype(str).fillna("").str.strip(),
         }
     )
 
+    # Parse date (do not drop rows)
     df["date"] = pd.to_datetime(df["date_raw"], errors="coerce", dayfirst=True)
 
+    # Row status flags
     df["row_status"] = "OK"
     df.loc[df["date"].isna(), "row_status"] = "INVALID_DATE"
     df.loc[df["details"].str.strip().eq(""), "row_status"] = "EMPTY_DETAILS"
 
+    # Optional month (blank if invalid date)
     df["month"] = df["date"].dt.to_period("M").astype(str)
+
     return df
 
 # ---------------------------
-# Matching fix: short keywords must match as whole words (DU != DUBAI)
+# Matching fix: short keywords must match whole tokens (DU != DUBAI)
 # ---------------------------
 
 def keyword_to_regex(kw: str) -> str:
     """
-    - For short alphanumeric keywords (<=3), match as a whole token.
-      e.g. DU should match ' DU ' but NOT 'DUBAI'.
-    - Otherwise, keep safe substring match.
+    - If keyword is short (1-3 chars alphanumeric), match as a whole token.
+      Example: DU matches ' DU ' but NOT 'DUBAI'.
+    - Otherwise, simple escaped substring match.
     """
     kw = kw.strip().upper()
     if re.fullmatch(r"[A-Z0-9]{1,3}", kw):
@@ -197,7 +231,7 @@ def keyword_to_regex(kw: str) -> str:
     return re.escape(kw)
 
 # ---------------------------
-# Categorisation: keyword contains (but smarter), fill empty only, OK rows only
+# Categorisation: keyword match, fill empty only, OK rows only
 # ---------------------------
 
 def apply_rules_fill_empty_only(df: pd.DataFrame, rules_df: pd.DataFrame, default_category: str = "Other") -> pd.DataFrame:
@@ -229,6 +263,10 @@ def apply_rules_fill_empty_only(df: pd.DataFrame, rules_df: pd.DataFrame, defaul
     df["category"] = result
     return df
 
+# ---------------------------
+# Export: download exactly what is shown
+# ---------------------------
+
 def build_exact_export_xlsx(df: pd.DataFrame) -> bytes:
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
@@ -242,6 +280,7 @@ def build_exact_export_xlsx(df: pd.DataFrame) -> bytes:
 def main():
     st.title("💳 Spend Tracker — Categorise Expenses")
 
+    # Session state
     if "rules_df" not in st.session_state:
         st.session_state.rules_df = pd.DataFrame(DEFAULT_RULES)
     if "df_all" not in st.session_state:
@@ -271,14 +310,17 @@ def main():
 
             df_all = pd.concat(dfs, ignore_index=True)
 
-            # Preserve upload order + original row order (stable)
+            # Preserve file upload order + original row order (stable)
             file_order_map = {f.name: i for i, f in enumerate(files)}
             df_all["file_order"] = df_all["source_file"].map(file_order_map)
             df_all = df_all.sort_values(["file_order", "row_id"], kind="stable").reset_index(drop=True)
 
             df_all["category"] = ""
             st.session_state.df_all = df_all
+
+            counts = df_all["row_status"].value_counts(dropna=False).to_dict()
             st.sidebar.success(f"Loaded {len(df_all)} rows ✅")
+            st.caption(f"Row status counts: {counts}")
 
     df_all = st.session_state.df_all
     if df_all is None:
@@ -297,6 +339,7 @@ def main():
         key="rules_editor",
     )
 
+    # Validate category values before apply
     invalid = rules_editor[~rules_editor["category"].isin(CATEGORIES)]
     if not invalid.empty:
         st.error("Some rules have invalid categories. Fix them or click **Reset rules to default**.")
@@ -307,7 +350,9 @@ def main():
             st.stop()
         st.session_state.rules_df = rules_editor
         st.session_state.df_all = apply_rules_fill_empty_only(
-            st.session_state.df_all, rules_editor, default_category="Other"
+            st.session_state.df_all,
+            rules_editor,
+            default_category="Other",
         )
         st.success("Rules applied ✅")
 
@@ -325,7 +370,11 @@ def main():
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
-    st.caption("Key fix: short keywords like 'DU' now match whole words (so 'DU' no longer matches 'DUBAI').")
+    st.caption(
+        "Notes: No rows are dropped. Rows flagged INVALID_DATE / EMPTY_DETAILS are kept. "
+        "Categorisation is applied only to rows with row_status = OK. "
+        "Short keywords like 'DU' match whole tokens, so they won't match 'DUBAI'."
+    )
 
 if __name__ == "__main__":
     main()
